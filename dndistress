@@ -1,9 +1,15 @@
 #!/bin/sh
 
-VERSION="0.0.1"
-CONTACT="saint@sainternet.xyz"
+NAME="DNdistresS"
+
+SCRIPT_NAME="${0##*/}"
+VERSION="1.0.0"
+BRANCH="master"
+
 LICENSE="GNU General Public License v3.0 or later"
-COPYRIGHT_YEAR="2026"
+
+CONTACT="saint@sainternet.xyz"
+COPYRIGHT_YEAR="© 2026"
 AUTHOR_NAME="saint-lascivious (Hayden Pearce)"
 
 set -eu
@@ -60,37 +66,11 @@ now_ms() {
     printf '%s000\n' "$t"
 }
 
-make_tmpdir() {
-    base="${1:-${TMPDIR:-/tmp}}"
-
-    if need_cmd mktemp; then
-        d="$(mktemp -d "$base/dns-prime-tokenbucket.XXXXXX" 2>/dev/null || true)"
-
-        if [ -n "$d" ] && [ -d "$d" ]; then
-            printf '%s\n' "$d"
-            return 0
-        fi
-
-    fi
-
-    umask 077
-    i=0
-
-    while [ "$i" -lt 1000 ]; do
-        d="$base/dns-prime-tokenbucket.$$.$i"
-
-        if mkdir "$d" 2>/dev/null; then
-            printf '%s\n' "$d"
-            return 0
-        fi
-
-        i=$((i + 1))
-    done
-
-    return 1
-}
-
 SCRIPT_START="$(now_ms)"
+
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
 
 _BINARY="${_BINARY:-auto}"
 _BURST="${_BURST:-32}"
@@ -103,7 +83,7 @@ else
 fi
 
 _CUSTOM="${_CUSTOM:-${_DIRECTORY}/custom.txt}"
-_DURATION="${_DURATION:-60}"
+_DURATION="${_DURATION:-300}"
 _FILE="${_FILE:-}"
 _FORMAT="${_FORMAT:-auto}"
 _INSTALL="${_INSTALL:-/usr/local/bin}"
@@ -112,10 +92,11 @@ _LOCATION="${_LOCATION:-local}"
 _MAXIMUM="${_MAXIMUM:-24}"
 _OUTPUT="${_OUTPUT:-quiet}"
 _PORT="${_PORT:-53}"
-_QPS="${_QPS:-80}"
+_QPS="${_QPS:-50}"
 _REMOTE="${_REMOTE:-}"
 _SECONDS="${_SECONDS:-86400}"
 _TOP="${_TOP:-10000}"
+_TOP_FILTERS="${_TOP_FILTERS:-}"
 _TYPE="${_TYPE:-A}"
 _UNINSTALL="${_UNINSTALL:-/usr/local/bin}"
 _URL="${_URL:-https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip}"
@@ -123,21 +104,22 @@ _VERBOSITY="${_VERBOSITY:-1}"
 
 SERVICE_DIR="${SERVICE_DIR:-/etc/systemd/system}"
 UNIT_BASE="dndistress"
+DEFAULT_ROOT_DIRECTORY="/var/cache/dndistress"
+DEFAULT_STATE_ROOT="/var/lib/dndistress"
+DEFAULT_RUNTIME_ROOT="/run/dndistress"
+STATUS_BASENAME="dndistress-status.json"
+LOCK_BASENAME="dndistress-status.lock"
 
-LOG_TAG="${0##*/}"
-if command -v logger >/dev/null 2>&1; then
-    USE_LOGGER=1
-else
-    USE_LOGGER=0
-fi
-
-SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY] [-D _DURATION] [-f _FILE] [-F _FORMAT] [-h] [-i _INSTALL] [-l _LOCAL] [-L _LOCATION] [-m _MAXIMUM] [-o _OUTPUT] [-p _PORT] [-q _QPS] [-r _REMOTE] [-s _SECONDS] [-S {w|c|warranty|conditions}] [-t _TOP] [-T _TYPE] [-u _UNINSTALL] [-U _URL] [-v] [-V _VERBOSITY]'
-
-need_cmd() {
-    command -v "$1" >/dev/null 2>&1
-}
+SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
+    [-D _DURATION] [-f _FILE] [-F _FORMAT] [-h] [-i _INSTALL] [-l _LOCAL]
+    [-L _LOCATION] [-m _MAXIMUM[!]] [--force-maximum] [-o _OUTPUT] [-p _PORT]
+    [-q _QPS] [-r _REMOTE] [-s _SECONDS] [-S {w|c|warranty|conditions}]
+    [-t (N|PATTERN)...] [-T _TYPE] [-u _UNINSTALL] [-U _URL] [-v]
+    [-V _VERBOSITY]
+'
 
 print_banner() {
+
     cat <<'EOF'
            _____   _____       _ _                             _____
           |  __ \ |  __ \     | (_)       _                   / ____)
@@ -147,6 +129,7 @@ print_banner() {
           |_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
 
 EOF
+
 }
 
 page_output() {
@@ -156,7 +139,7 @@ page_output() {
         if need_cmd less; then
             less -FRX && return 0
         elif need_cmd more; then
-            more && return 0
+            more -d && return 0
         fi
 
     fi
@@ -168,83 +151,101 @@ page_output() {
     return 0
 }
 
-usage() {
+LOG_TAG="${0##*/}"
+USE_LOGGER="${USE_LOGGER:-0}"
 
-    [ "$_VERBOSITY" -ge 3 ] && print_banner
+if need_cmd logger; then
+    USE_LOGGER=1
+fi
 
-    prog_name="${0##*/}"
+colourset() {
 
-    awk -v prog="$prog_name" -v syn="$SYNOPSIS" -v cols="${COLUMNS:-80}" '
-        BEGIN {
-            print "Usage:"
-            head = "  " prog " "
-            ind  = sprintf("%" length(head) "s", "")
-            line = head
-            s    = syn
-            while (match(s, /\[[^]]+\]/)) {
-                tok = substr(s, RSTART, RLENGTH)
-                s   = substr(s, RSTART + RLENGTH)
-                cand = (line == head) ? line tok : line " " tok
-                if (length(cand) + 2 > cols) {
-                    printf "%s \\\n", line
-                    line = ind tok
-                } else {
-                    line = cand
-                }
-            }
-            print line
-            print ""
-            print "  " prog " --help [topic]"
-            print "  " prog " help [topic]"
-            print "  " prog " install [PATH]"
-            print "  " prog " uninstall [PATH]"
-            print "  " prog " show {w|c|warranty|conditions}"
-            print "  " prog " --show {w|c|warranty|conditions}"
-            print "  " prog " --show-warranty"
-            print "  " prog " --show-conditions"
-        }
-    '
+    if { [ -t 1 ] && [ "$(tput colors)" -ge 8 ]; }; then
+        TXT_BLUE='\033[94m'
+        TXT_BOLD='\033[1m'
+        TXT_CYAN='\033[96m'
+        TXT_GREY='\033[90m'
+        TXT_GREEN='\033[32m'
+        TXT_LIGHT_GREY='\033[37m'
+        TXT_N_C='\033[0m'
+        TXT_RED='\033[91m'
+        TXT_YELLOW='\033[33m'
+    else
+        TXT_BLUE=''
+        TXT_BOLD=''
+        TXT_CYAN=''
+        TXT_GREY=''
+        TXT_GREEN=''
+        TXT_LIGHT_GREY=''
+        TXT_N_C=''
+        TXT_RED=''
+        TXT_YELLOW=''
+    fi
 
-    cat <<EOF
-
-Help:
-  -h, --help [topic]
-
-  help [topic]
-      Show help for a specific topic. Topic can be a command or option.
-
-      Reverse parsing is supported (examples):
-        ${0##*/} --help --install
-        ${0##*/} --install --help
-        ${0##*/} --help -q
-        ${0##*/} -q --help
-
-Topic examples:
-  general, info, description, runtime, resolver, install, uninstall, show, version,
-  binary, burst, column, custom, directory, duration, file, format,
-  local, location, maximum, output, port, qps, remote, seconds,
-  top, type, url, verbosity
-
-Tip:
-  Run '${0##*/} --help topics' to list all available topics.
-EOF
 }
 
-run_show_topic() {
-    case "${1:-}" in
-        w|warranty)
-            show_warranty | page_output
-            exit 0
+colourset
+
+log() {
+    lvl="${1:-3}"
+
+    shift || true
+
+    msg="${*:-}"
+
+    case "$lvl" in
+        0|critical|CRITICAL)
+            n=0
+            pfx="${TXT_LIGHT_GREY}${TXT_BOLD}${TXT_RED}!${TXT_N_C}${TXT_LIGHT_GREY}${TXT_N_C}"
+            pri="user.crit"
             ;;
-        c|conditions)
-            show_conditions | page_output
-            exit 0
+        1|error|ERROR)
+            n=1
+            pfx="${TXT_LIGHT_GREY}${TXT_RED}✗${TXT_LIGHT_GREY}${TXT_N_C}"
+            pri="user.err"
+            ;;
+        2|warning|WARNING|warn|WARN)
+            n=2
+            pfx="${TXT_LIGHT_GREY}${TXT_YELLOW}⚠${TXT_LIGHT_GREY}${TXT_N_C}"
+            pri="user.warning"
+            ;;
+        3|info|INFO)
+            n=3
+            pfx="${TXT_LIGHT_GREY}${TXT_BLUE}i${TXT_LIGHT_GREY}${TXT_N_C}"
+            pri="user.info"
+            ;;
+        4|debug|DEBUG)
+            n=4
+            pfx="${TXT_LIGHT_GREY}${TXT_GREY}•${TXT_LIGHT_GREY}${TXT_N_C}"
+            pri="user.debug"
             ;;
         *)
-            printf '%s\n' "Usage: ${0##*/} show {w|c|warranty|conditions}" >&2
-            exit 2
+            n=3
+            pfx="${TXT_LIGHT_GREY}${TXT_BLUE}?${TXT_LIGHT_GREY}${TXT_N_C}"
+            pri="user.info"
+            msg="${TXT_CYAN}${msg}${TXT_N_C}"
             ;;
     esac
+
+    case "${_VERBOSITY:-0}" in
+        0|1|2|3|4)
+            v="${_VERBOSITY}"
+            ;;
+        *)
+            v=0
+            ;;
+    esac
+
+    [ "$v" -ge "$n" ] || return 0
+
+    if [ "$USE_LOGGER" -eq 1 ] && [ ! -t 2 ]; then
+        clean_msg="$(printf '%s' "$msg" | sed 's/\x1B\[[0-9;]*[a-zA-Z]//g')"
+
+        logger -t "$LOG_TAG" -p "$pri" -- "$clean_msg"
+
+    else
+        printf '%b %b\n' "[$pfx]" "$msg" >&2
+    fi
 }
 
 is_posint() {
@@ -271,6 +272,152 @@ is_nonnegint() {
             ;;
     esac
 
+}
+
+compute_runtime_metrics() {
+    sent="${SENT:-0}"
+    start_ms="${START_TS:-$SCRIPT_START}"
+    end_ms="${END_MS:-$(now_ms)}"
+    last_sent_ms="${LAST_SENT_MS:-$start_ms}"
+    queries_start="${QUERIES_START:-$start_ms}"
+
+    if [ "$sent" -eq 0 ]; then
+        last_sent_ms="$start_ms"
+        queries_start="$start_ms"
+    fi
+
+    if [ "$sent" -gt 0 ] && [ "$last_sent_ms" -eq "$queries_start" ]; then
+        last_sent_ms="$end_ms"
+    fi
+
+    active_ms=$((last_sent_ms - queries_start))
+    queries_window_ms=$((last_sent_ms - queries_start))
+    script_window_ms=$((end_ms - SCRIPT_START))
+
+    if [ "$active_ms" -gt 0 ]; then
+        ach_qps="$(awk -v s="$sent" -v ms="$active_ms" 'BEGIN { printf "%.2f", s / (ms / 1000) }')"
+    else
+        ach_qps="0"
+    fi
+
+    if [ "$script_window_ms" -gt 0 ]; then
+        total_qps="$(awk -v s="$sent" -v ms="$script_window_ms" 'BEGIN { printf "%.2f", s / (ms / 1000) }')"
+    else
+        total_qps="0"
+    fi
+
+    BLOCKED=0
+    BLOCK_PCT=0
+    NXDOMAIN=0
+    NXDOMAIN_PCT=0
+
+    if [ -f "$ANSWERS_FILE" ]; then
+        BLOCKED=$(awk '$0=="0.0.0.0" || $0=="::"' "$ANSWERS_FILE" | wc -l)
+        NXDOMAIN=$(awk '$0=="NXDOMAIN"' "$ANSWERS_FILE" | wc -l)
+        TOTAL=$(wc -l < "$ANSWERS_FILE")
+        if [ "$TOTAL" -gt 0 ]; then
+            BLOCK_PCT=$(awk -v b="$BLOCKED" -v t="$TOTAL" 'BEGIN{printf "%.0f", (b/t)*100}')
+            NXDOMAIN_PCT=$(awk -v n="$NXDOMAIN" -v t="$TOTAL" 'BEGIN{printf "%.0f", (n/t)*100}')
+        fi
+    fi
+}
+
+is_running_under_own_service() {
+
+    [ -n "${INVOCATION_ID:-}" ] || return 1
+
+    [ -r "/proc/$$/cgroup" ] || return 1
+
+    grep -q "/${UNIT_BASE}\.service" "/proc/$$/cgroup" 2>/dev/null
+
+}
+
+_STATUS_ENABLED="${_STATUS_ENABLED:-0}"
+_LOCK_DIR="${_LOCK_DIR:-/var/lock}"
+_LOCK_FILE="${_LOCK_FILE:-$_LOCK_DIR/dndistress-status.lock}"
+_STATUS_DIR="${_STATUS_DIR:-/var/lib/dndistress/status}"
+_STATUS_FILE="${_STATUS_FILE:-$_STATUS_DIR/dndistress-status.json}"
+
+exit_with_status() {
+    code="${1:-0}"
+
+    [ "$_STATUS_ENABLED" = "1" ] || exit "$code"
+
+    is_running_under_own_service || exit "$code"
+
+    if ! mkdir -p "$_STATUS_DIR" 2>/dev/null; then
+
+        log 1 "${TXT_RED}Failed to create status dir: ${TXT_LIGHT_GREY}$_STATUS_DIR${TXT_N_C}"
+
+        exit "$code"
+    fi
+
+    if need_cmd flock; then
+        exec 9>"$_LOCK_FILE"
+        flock 9
+    fi
+
+    compute_runtime_metrics
+
+    now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+    umask 022
+
+    cat > "$_STATUS_FILE" <<EOF
+{
+  "status": {
+    "exit_code": $code,
+    "timestamp": "$now"
+  },
+  "metrics": {
+    "sent": $sent,
+    "active_ms": $active_ms,
+    "queries_window_ms": $queries_window_ms,
+    "script_window_ms": $script_window_ms,
+    "ach_qps": $ach_qps,
+    "total_qps": $total_qps,
+    "resolver": "$(printf '%s' "$RESOLVER" | sed 's/"/\\"/g')",
+    "blocked": $BLOCKED,
+    "blocked_pct": $BLOCK_PCT,
+    "nxdomain": $NXDOMAIN,
+    "nxdomain_pct": $NXDOMAIN_PCT
+  },
+  "config": {
+    "binary": "$(printf '%s' "$_BINARY" | sed 's/"/\\"/g')",
+    "burst": $_BURST,
+    "column": $_COLUMN,
+    "custom": "$(printf '%s' "$_CUSTOM" | sed 's/"/\\"/g')",
+    "directory": "$(printf '%s' "$_DIRECTORY" | sed 's/"/\\"/g')",
+    "duration": $_DURATION,
+    "file": "$(printf '%s' "$_FILE" | sed 's/"/\\"/g')",
+    "format": "$(printf '%s' "$_FORMAT" | sed 's/"/\\"/g')",
+    "install": "$(printf '%s' "$_INSTALL" | sed 's/"/\\"/g')",
+    "local": "$(printf '%s' "$_LOCAL" | sed 's/"/\\"/g')",
+    "location": "$(printf '%s' "$_LOCATION" | sed 's/"/\\"/g')",
+    "maximum": $_MAXIMUM,
+    "output": "$(printf '%s' "$_OUTPUT" | sed 's/"/\\"/g')",
+    "port": $_PORT,
+    "qps": $_QPS,
+    "remote": "$(printf '%s' "$_REMOTE" | sed 's/"/\\"/g')",
+    "seconds": $_SECONDS,
+    "top": $_TOP,
+    "top_filters": "$(printf '%s' "$_TOP_FILTERS" | sed 's/"/\\"/g')",
+    "type": "$(printf '%s' "$_TYPE" | sed 's/"/\\"/g')",
+    "uninstall": "$(printf '%s' "$_UNINSTALL" | sed 's/"/\\"/g')",
+    "url": "$(printf '%s' "$_URL" | sed 's/"/\\"/g')",
+    "verbosity": $_VERBOSITY
+  }
+}
+EOF
+
+    chmod 644 "$_STATUS_FILE"
+
+    if [ -e "$_LOCK_FILE" ] && [ -n "${BASH_VERSION:-}" ]; then
+        flock -u 9
+        exec 9>&-
+    fi
+
+    exit "$code"
 }
 
 parse_duration() {
@@ -353,132 +500,99 @@ parse_duration() {
     printf '%s\n' "$result"
 }
 
-is_running_under_own_service() {
-
-    [ -n "${INVOCATION_ID:-}" ] || return 1
-
-    [ -r "/proc/$$/cgroup" ] || return 1
-
-    grep -q "/${UNIT_BASE}\.service" "/proc/$$/cgroup" 2>/dev/null
-}
-
-timer_period_seconds() {
-
-    if [ -n "${_TIMER_PERIOD:-}" ]; then
-        p="$(parse_duration "$_TIMER_PERIOD" 2>/dev/null || true)"
-
-        case "$p" in
-            ''|*[!0-9]*|0)
-                return 1
-                ;;
-        esac
-
-        printf '%s\n' "$p"
-        return 0
-    fi
-
-    if need_cmd systemctl; then
-        usec="$(systemctl show "${UNIT_BASE}.timer" -p OnUnitActiveUSec --value 2>/dev/null || true)"
-
-        case "$usec" in
-            ''|*[!0-9]*|0)
-                ;;
-            *)
-                sec=$(( (usec + 999999) / 1000000 ))
-                [ "$sec" -gt 0 ] || return 1
-                printf '%s\n' "$sec"
-                return 0
-                ;;
-        esac
-
-    fi
-
-    timer_file="$SERVICE_DIR/${UNIT_BASE}.timer"
-
-    if [ -r "$timer_file" ]; then
-        raw="$(awk -F= '
-            /^[[:space:]]*OnUnitActiveSec[[:space:]]*=/ {
-                v=$2
-                sub(/^[[:space:]]+/, "", v)
-                sub(/[[:space:]]+$/, "", v)
-                print v
-                exit
-            }
-        ' "$timer_file")"
-
-        [ -n "$raw" ] || return 1
-
-        sec="$(parse_duration "$raw" 2>/dev/null || true)"
-
-        case "$sec" in
-            ''|*[!0-9]*|0)
-                return 1
-                ;;
-        esac
-
-        printf '%s\n' "$sec"
-        return 0
-    fi
-
-    return 1
-}
-
-enforce_timer_duration_guard() {
-
-    is_running_under_own_service || return 0
-
-    period="$(timer_period_seconds 2>/dev/null || true)"
-
-    if [ -z "$period" ]; then
-        log 2 "service context detected, but timer period could not be determined; skipping _DURATION guard"
-        return 0
-    fi
-
-    if [ "$_DURATION" -eq 0 ]; then
-        log 2 "_DURATION=0 under timer; clamping to timer period (${period}s)"
-        _DURATION="$period"
-        return 0
-    fi
-
-    if [ "$_DURATION" -gt "$period" ]; then
-        log 2 "_DURATION too high for timer ($_DURATION > $period), clamping"
-        _DURATION="$period"
-    fi
-}
-
 rr_type_from_id() {
 
     case "$1" in
-        1) printf '%s\n' "A" ;;
-        2) printf '%s\n' "NS" ;;
-        5) printf '%s\n' "CNAME" ;;
-        6) printf '%s\n' "SOA" ;;
-        12) printf '%s\n' "PTR" ;;
-        15) printf '%s\n' "MX" ;;
-        16) printf '%s\n' "TXT" ;;
-        28) printf '%s\n' "AAAA" ;;
-        33) printf '%s\n' "SRV" ;;
-        35) printf '%s\n' "NAPTR" ;;
-        39) printf '%s\n' "DNAME" ;;
-        43) printf '%s\n' "DS" ;;
-        44) printf '%s\n' "SSHFP" ;;
-        45) printf '%s\n' "IPSECKEY" ;;
-        46) printf '%s\n' "RRSIG" ;;
-        47) printf '%s\n' "NSEC" ;;
-        48) printf '%s\n' "DNSKEY" ;;
-        50) printf '%s\n' "NSEC3" ;;
-        51) printf '%s\n' "NSEC3PARAM" ;;
-        52) printf '%s\n' "TLSA" ;;
-        59) printf '%s\n' "CDS" ;;
-        60) printf '%s\n' "CDNSKEY" ;;
-        61) printf '%s\n' "OPENPGPKEY" ;;
-        62) printf '%s\n' "CSYNC" ;;
-        63) printf '%s\n' "ZONEMD" ;;
-        64) printf '%s\n' "SVCB" ;;
-        65) printf '%s\n' "HTTPS" ;;
-        108) printf '%s\n' "EUI48" ;;
-        109) printf '%s\n' "EUI64" ;;
-        257) printf '%s\n' "CAA" ;;
+        1)
+            printf '%s\n' "A"
+            ;;
+        2)
+            printf '%s\n' "NS"
+            ;;
+        5)
+            printf '%s\n' "CNAME"
+            ;;
+        6)
+            printf '%s\n' "SOA"
+            ;;
+        12)
+            printf '%s\n' "PTR"
+            ;;
+        15)
+            printf '%s\n' "MX"
+            ;;
+        16)
+            printf '%s\n' "TXT"
+            ;;
+        28)
+            printf '%s\n' "AAAA"
+            ;;
+        33)
+            printf '%s\n' "SRV"
+            ;;
+        35)
+            printf '%s\n' "NAPTR"
+            ;;
+        39)
+            printf '%s\n' "DNAME"
+            ;;
+        43)
+            printf '%s\n' "DS"
+            ;;
+        44)
+            printf '%s\n' "SSHFP"
+            ;;
+        45)
+            printf '%s\n' "IPSECKEY"
+            ;;
+        46)
+            printf '%s\n' "RRSIG"
+            ;;
+        47)
+            printf '%s\n' "NSEC"
+            ;;
+        48)
+            printf '%s\n' "DNSKEY"
+            ;;
+        50)
+            printf '%s\n' "NSEC3"
+            ;;
+        51)
+            printf '%s\n' "NSEC3PARAM"
+            ;;
+        52)
+            printf '%s\n' "TLSA"
+            ;;
+        59)
+            printf '%s\n' "CDS"
+            ;;
+        60)
+            printf '%s\n' "CDNSKEY"
+            ;;
+        61)
+            printf '%s\n' "OPENPGPKEY"
+            ;;
+        62)
+            printf '%s\n' "CSYNC"
+            ;;
+        63)
+            printf '%s\n' "ZONEMD"
+            ;;
+        64)
+            printf '%s\n' "SVCB"
+            ;;
+        65)
+            printf '%s\n' "HTTPS"
+            ;;
+        108)
+            printf '%s\n' "EUI48"
+            ;;
+        109)
+            printf '%s\n' "EUI64"
+            ;;
+        257)
+            printf '%s\n' "CAA"
+            ;;
         *)
             return 1
             ;;
@@ -537,6 +651,7 @@ EOF
 
 is_local_ipv4() {
     ip="$1"
+
     is_ipv4_addr "$ip" || return 1
 
     IFS=. read -r o1 o2 o3 o4 extra <<EOF
@@ -567,7 +682,9 @@ is_ipv6_addr_basic() {
         *%*)
             zone=${addr#*%}
             addr=${addr%%\%*}
+
             is_zone_id "$zone" || return 1
+
             ;;
     esac
 
@@ -693,6 +810,7 @@ is_ipv6_addr_basic() {
 
 is_local_ipv6() {
     ip_lc="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+
     is_ipv6_addr_basic "$ip_lc" || return 1
 
     addr="$ip_lc"
@@ -715,8 +833,11 @@ is_local_ipv6() {
     case "$addr" in
         *.*)
             v4tail=${addr##*:}
+
             is_ipv4_addr "$v4tail" || return 1
+
             is_local_ipv4 "$v4tail" && return 0
+
             return 1
             ;;
     esac
@@ -734,8 +855,11 @@ is_local_ipv6() {
 
 is_valid_local_dns() {
     ip="$1"
+
     is_local_ipv4 "$ip" && return 0
+
     is_local_ipv6 "$ip" && return 0
+
     return 1
 }
 
@@ -749,7 +873,9 @@ is_valid_dns() {
     esac
 
     is_ipv4_addr "$ip" && return 0
+
     is_ipv6_addr_basic "$ip" && return 0
+
     return 1
 }
 
@@ -802,70 +928,17 @@ parse_dns_opt() {
     [ -n "$host" ] || return 1
 
     if [ -n "$prt" ]; then
+
         is_port "$prt" || return 1
+
     fi
 
     PARSED_DNS_HOST="$host"
     PARSED_DNS_PORT="$prt"
-    log 4 "parse_dns_opt: arg='$arg' host='$PARSED_DNS_HOST' port='${PARSED_DNS_PORT:-$_PORT}'"
+
+    log 4 "${TXT_GREY}parse_dns_opt: parsed host='${TXT_LIGHT_GREY}${host}${TXT_GREY}' port='${TXT_LIGHT_GREY}${prt}${TXT_GREY}' from arg='${TXT_LIGHT_GREY}${arg}${TXT_GREY}'${TXT_N_C}"
+
     return 0
-}
-
-log() {
-    lvl="${1:-3}"
-    shift || true
-    msg="${*:-}"
-
-    case "$lvl" in
-        0|critical|CRITICAL)
-            n=0
-            pfx="CRITICAL"
-            pri="user.crit"
-            ;;
-        1|error|ERROR)
-            n=1
-            pfx="ERROR"
-            pri="user.err"
-            ;;
-        2|warning|WARNING|warn|WARN)
-            n=2
-            pfx="WARNING"
-            pri="user.warning"
-            ;;
-        3|info|INFO)
-            n=3
-            pfx="INFO"
-            pri="user.info"
-            ;;
-        4|debug|DEBUG)
-            n=4
-            pfx="DEBUG"
-            pri="user.debug"
-            ;;
-        *)
-            n=3
-            pfx="INFO"
-            pri="user.info"
-            msg="$lvl${msg:+ $msg}"
-            ;;
-    esac
-
-    case "${_VERBOSITY:-0}" in
-        0|1|2|3|4)
-            v="${_VERBOSITY}"
-            ;;
-        *)
-            v=0
-            ;;
-    esac
-
-    [ "$v" -ge "$n" ] || return 0
-
-    if [ "$USE_LOGGER" -eq 1 ] && [ ! -t 2 ]; then
-        logger -t "$LOG_TAG" -p "$pri" -- "[$pfx]: $msg"
-    else
-        printf '[%s]: %s\n' "$pfx" "$msg" >&2
-    fi
 }
 
 format_runtime_ms() {
@@ -949,22 +1022,30 @@ case "$_VERBOSITY" in
     0|1|2|3|4)
         ;;
     *)
-        log 1 "_VERBOSITY must be one (1) of 0|1|2|3|4, got: $_VERBOSITY"
-        exit 2
+
+        log 1 "${TXT_RED}_VERBOSITY must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}0${TXT_RED}|${TXT_LIGHT_GREY}1${TXT_RED}|${TXT_LIGHT_GREY}2${TXT_RED}|${TXT_LIGHT_GREY}3${TXT_RED}|${TXT_LIGHT_GREY}4${TXT_RED}, got: ${TXT_LIGHT_GREY}$_VERBOSITY${TXT_N_C}"
+
+        exit_with_status 2
+
         ;;
 esac
 
 is_absolute_path() {
 
     case "$1" in
-        /*) return 0 ;;
-        *)  return 1 ;;
+        /*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
     esac
 
 }
 
 is_valid_target_dir() {
     p="$1"
+
     is_absolute_path "$p" || return 1
 
     [ -e "$p" ] && [ ! -d "$p" ] && return 1
@@ -994,40 +1075,75 @@ as_root_or_sudo() {
     [ "$(id -u)" -eq 0 ] && return 0
 
     if need_cmd sudo; then
-        exec sudo "$0" "$@"
+        exec sudo \
+            _STATUS_ENABLED="${_STATUS_ENABLED:-0}" \
+            _STATUS_DIR="$_STATUS_DIR" \
+            _STATUS_FILE="$_STATUS_FILE" \
+            _LOCK_DIR="$_LOCK_DIR" \
+            _LOCK_FILE="$_LOCK_FILE" \
+            _VERBOSITY="$_VERBOSITY" \
+            SERVICE_DIR="$SERVICE_DIR" \
+            UNIT_BASE="$UNIT_BASE" \
+            DEFAULT_ROOT_DIRECTORY="$DEFAULT_ROOT_DIRECTORY" \
+            DEFAULT_STATE_ROOT="$DEFAULT_STATE_ROOT" \
+            DEFAULT_RUNTIME_ROOT="$DEFAULT_RUNTIME_ROOT" \
+            STATUS_BASENAME="$STATUS_BASENAME" \
+            LOCK_BASENAME="$LOCK_BASENAME" \
+            "$0" "$@"
     fi
 
-    log 1 "root privileges required; sudo unavailable"
+    log 1 "${TXT_RED}root privileges required; sudo unavailable${TXT_N_C}"
+
     return 1
 }
 
-systemctl_maybe() {
+service_state_root() {
+    printf '%s\n' "$DEFAULT_STATE_ROOT"
+}
 
-    if need_cmd systemctl; then
-        systemctl "$@" >/dev/null 2>&1 || true
-    fi
+service_runtime_root() {
+    printf '%s\n' "$DEFAULT_RUNTIME_ROOT"
+}
 
+
+service_safe_directory() {
+    case "${_DIRECTORY:-}" in
+        ''|/home/*|/root/*)
+            printf '%s\n' "$DEFAULT_ROOT_DIRECTORY"
+            ;;
+        *)
+            printf '%s\n' "$_DIRECTORY"
+            ;;
+    esac
 }
 
 write_service_unit() {
     out="$1"
     exec_path="$2"
+    service_directory="$3"
+    service_state_root="$(service_state_root)"
+    service_runtime_root="$(service_runtime_root)"
 
     cat > "$out" <<EOF
 [Unit]
-Description=Run DNdistresS DNS query workload
+Description=Run $NAME DNS query workload
 Documentation=man:systemd.service(5)
 Wants=network-online.target
 After=network-online.target
-ConditionPathIsExecutable=$exec_path
+ConditionFileIsExecutable=$exec_path
 
 [Service]
 Type=oneshot
 User=root
 Group=root
 UMask=0027
-Environment=_DIRECTORY=/var/cache/dndistress
-Environment=_VERBOSITY=3
+Environment=_DIRECTORY=$service_directory
+Environment=_STATUS_ENABLED=$_STATUS_ENABLED
+Environment=_STATUS_DIR=$service_state_root/status
+Environment=_STATUS_FILE=$service_state_root/status/$STATUS_BASENAME
+Environment=_LOCK_DIR=$service_runtime_root
+Environment=_LOCK_FILE=$service_runtime_root/$LOCK_BASENAME
+Environment=_VERBOSITY=$_VERBOSITY
 ExecStart=$exec_path
 StandardOutput=journal
 StandardError=journal
@@ -1035,11 +1151,24 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/cache/dndistress
+CacheDirectory=$UNIT_BASE
+StateDirectory=$UNIT_BASE
+RuntimeDirectory=$UNIT_BASE
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+}
+
+systemctl_maybe() {
+
+    if need_cmd systemctl; then
+
+        systemctl "$@" >/dev/null 2>&1 || true
+
+    fi
+
 }
 
 write_timer_unit() {
@@ -1047,11 +1176,10 @@ write_timer_unit() {
 
     cat > "$out" <<EOF
 [Unit]
-Description=Periodic DNdistresS run
+Description=Periodic $NAME run
 Documentation=man:systemd.timer(5)
 
 [Timer]
-OnBootSec=2min
 OnUnitActiveSec=1h
 Persistent=true
 RandomizedDelaySec=5min
@@ -1061,63 +1189,107 @@ Unit=dndistress.service
 [Install]
 WantedBy=timers.target
 EOF
+
 }
 
 do_install() {
     target="$1"
-    is_valid_target_dir "$target" || { log 1 "invalid install path: $target"; exit 2; }
 
-    as_root_or_sudo -i "$target"
+    is_valid_target_dir "$target" || { log 1 "${TXT_RED}invalid install path: ${TXT_LIGHT_GREY}$target${TXT_N_C}"
 
-    mkdir -p "$target"
-    src="$(self_source_path)" || { log 1 "unable to resolve script path"; exit 1; }
+        exit_with_status 2
+
+    }
+
+    as_root_or_sudo -i "$target" -V "$_VERBOSITY"
+
+    [ ! -t 2 ] || [ "$_VERBOSITY" -lt 3 ] || print_banner >&2
+
+    service_directory="$(service_safe_directory)"
+
+    mkdir -p "$target" "$SERVICE_DIR"
+
+    log 4 "${TXT_GREY}ensured install directories exist: ${TXT_LIGHT_GREY}$target${TXT_GREY}, ${TXT_LIGHT_GREY}$SERVICE_DIR${TXT_N_C}"
+
+    src="$(self_source_path)" || { log 1 "${TXT_RED}unable to resolve script path for installation${TXT_N_C}"
+
+        exit_with_status 1
+
+    }
 
     if need_cmd install; then
+
         install -m 0755 "$src" "$target/$UNIT_BASE"
-        log 4 "installed using 'install' command"
+
+        log 4 "${TXT_GREY}installed using 'install' command${TXT_N_C}"
+
     else
+
         cp "$src" "$target/$UNIT_BASE"
+
         chmod 0755 "$target/$UNIT_BASE"
-        log 4 "installed using 'cp' and 'chmod'"
+
+        log 4 "${TXT_GREY}installed using 'cp' and 'chmod' commands${TXT_N_C}"
+
     fi
 
-    mkdir -p "$SERVICE_DIR"
-    log 4 "ensured service directory exists: $SERVICE_DIR"
+    write_service_unit "$SERVICE_DIR/${UNIT_BASE}.service" "$target/$UNIT_BASE" "$service_directory"
 
-    write_service_unit "$SERVICE_DIR/${UNIT_BASE}.service" "$target/$UNIT_BASE"
-    log 4 "wrote service unit to $SERVICE_DIR/${UNIT_BASE}.service"
+    log 4 "${TXT_GREY}wrote service unit to ${TXT_LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.service${TXT_N_C}"
 
     write_timer_unit "$SERVICE_DIR/${UNIT_BASE}.timer"
-    log 4 "wrote timer unit to $SERVICE_DIR/${UNIT_BASE}.timer"
+
+    log 4 "${TXT_GREY}wrote timer unit to ${TXT_LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.timer${TXT_N_C}"
 
     systemctl_maybe daemon-reload
-    log 4 "reloaded systemd daemon"
-    systemctl_maybe enable --now "${UNIT_BASE}.timer"
-    log 4 "enabled and started timer unit ${UNIT_BASE}.timer"
 
-    log 3 "installed: $target/$UNIT_BASE"
-    log 3 "installed: $SERVICE_DIR/${UNIT_BASE}.service"
-    log 3 "installed: $SERVICE_DIR/${UNIT_BASE}.timer"
+    systemctl_maybe reset-failed "${UNIT_BASE}.service" "${UNIT_BASE}.timer"
+
+    systemctl_maybe enable --now "${UNIT_BASE}.timer"
+
+    log 4 "${TXT_GREY}reloaded systemd daemon, cleared stale failed state, and enabled timer ${TXT_LIGHT_GREY}${UNIT_BASE}.timer${TXT_N_C}"
+
+    log 3 "${TXT_BLUE}installed: ${TXT_LIGHT_GREY}$target/$UNIT_BASE${TXT_N_C}"
+
+    log 3 "${TXT_BLUE}installed: ${TXT_LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.service${TXT_N_C}"
+
+    log 3 "${TXT_BLUE}installed: ${TXT_LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.timer${TXT_N_C}"
+
 }
 
 do_uninstall() {
     target="$1"
-    is_valid_target_dir "$target" || { log 1 "invalid uninstall path: $target"; exit 2; }
 
-    as_root_or_sudo -u "$target"
+    is_valid_target_dir "$target" || { log 1 "${TXT_RED}invalid uninstall path: ${TXT_LIGHT_GREY}$target${TXT_N_C}"
+
+        exit_with_status 2
+
+    }
+
+    as_root_or_sudo -u "$target" -V "$_VERBOSITY"
+
+    [ ! -t 2 ] || [ "$_VERBOSITY" -lt 3 ] || print_banner >&2
 
     systemctl_maybe disable --now "${UNIT_BASE}.timer"
+
     systemctl_maybe stop "${UNIT_BASE}.service"
-    log 4 "disabled timer unit ${UNIT_BASE}.timer and stopped service unit ${UNIT_BASE}.service"
+
+    log 4 "${TXT_GREY}disabled timer unit ${TXT_LIGHT_GREY}${UNIT_BASE}.timer ${TXT_GREY}and stopped service unit ${TXT_LIGHT_GREY}${UNIT_BASE}.service${TXT_N_C}"
 
     rm -f "$SERVICE_DIR/${UNIT_BASE}.service" "$SERVICE_DIR/${UNIT_BASE}.timer" || true
+
     rm -f "$target/$UNIT_BASE" || true
-    log 4 "removed files for $UNIT_BASE from $target and $SERVICE_DIR"
+
+    log 4 "${TXT_GREY}removed files for ${TXT_LIGHT_GREY}$UNIT_BASE ${TXT_GREY}from ${TXT_LIGHT_GREY}$target ${TXT_GREY}and ${TXT_LIGHT_GREY}$SERVICE_DIR${TXT_N_C}"
 
     systemctl_maybe daemon-reload
-    log 4 "reloaded systemd daemon"
 
-    log 3 "removed units and binary for $UNIT_BASE"
+    systemctl_maybe reset-failed "${UNIT_BASE}.service" "${UNIT_BASE}.timer"
+
+    log 4 "${TXT_GREY}reloaded systemd daemon and cleared stale failed state${TXT_N_C}"
+
+    log 3 "${TXT_BLUE}removed units and binary for ${TXT_LIGHT_GREY}$UNIT_BASE${TXT_N_C}"
+
 }
 
 download_file() {
@@ -1125,21 +1297,67 @@ download_file() {
     dst="$2"
 
     if need_cmd curl; then
-        log 4 "downloading using curl: $src -> $dst"
-        curl -fsSL "$src" -o "$dst"
+
+        log 4 "${TXT_GREY}downloading using curl: ${TXT_LIGHT_GREY}$src ${TXT_GREY}-> ${TXT_LIGHT_GREY}$dst${TXT_N_C}"
+
+        curl -fsSL "$src" -o "$dst" || {
+
+            log 1 "${TXT_RED}download failed with curl: ${TXT_LIGHT_GREY}$src${TXT_N_C}"
+
+            return 1
+        }
+
     elif need_cmd wget; then
-        log 4 "downloading using wget: $src -> $dst"
-        wget -qO "$dst" "$src"
+
+        log 4 "${TXT_GREY}downloading using wget: ${TXT_LIGHT_GREY}$src ${TXT_GREY}-> ${TXT_LIGHT_GREY}$dst${TXT_N_C}"
+
+        wget -qO "$dst" "$src" || {
+
+            log 1 "${TXT_RED}download failed with wget: ${TXT_LIGHT_GREY}$src${TXT_N_C}"
+
+            return 1
+        }
+
     else
-        log 1 "need curl or wget for downloading"
+
+        log 1 "${TXT_RED}need curl or wget for downloading${TXT_N_C}"
+
         return 1
     fi
 
 }
 
+validate_zip_file() {
+    z="$1"
+
+    need_cmd unzip || return 1
+
+    unzip -t "$z" >/dev/null 2>&1
+
+}
+
+extract_zip_to_file() {
+    z="$1"
+    out="$2"
+
+    need_cmd unzip || return 1
+
+    member="$(unzip -Z1 "$z" 2>/dev/null | awk 'NF && $0 !~ /\/$/ { print; exit }')"
+
+    [ -n "$member" ] || return 1
+
+    unzip -p "$z" "$member" > "$out" 2>/dev/null || return 1
+
+    [ -s "$out" ]
+
+}
+
 cache_key() {
-    printf '%s\n' "$1" | cksum | awk '{ print $1 }'
-    log 4 "cache_key: input='$1' key='$(printf '%s\n' "$1" | cksum | awk '{ print $1 }')'"
+    key="$(printf '%s\n' "$1" | cksum | awk '{ print $1 }')"
+
+    log 4 "${TXT_GREY}cache_key: input=${TXT_LIGHT_GREY}$1 ${TXT_GREY}key=${TXT_LIGHT_GREY}$key${TXT_N_C}"
+
+    printf '%s\n' "$key"
 }
 
 copy_if_needed() {
@@ -1148,37 +1366,69 @@ copy_if_needed() {
 
     [ "$src" = "$dst" ] && return 0
 
-    cp "$src" "$dst"
+    cp "$src" "$dst" || {
+
+        log 1 "${TXT_RED}failed to copy ${TXT_LIGHT_GREY}$src ${TXT_RED}-> ${TXT_LIGHT_GREY}$dst${TXT_N_C}"
+
+        return 1
+    }
+
 }
 
 CACHE_AGE=0
-USING_CACHE=0
-USING_CACHE_STR=""
+FETCH_CACHE_TMP=""
+FETCH_SOURCE_PATH=""
 
 fetch_source() {
     dst="$1"
 
+    FETCH_SOURCE_PATH=""
+
     if [ -n "$_FILE" ]; then
-        log 3 "using local source: $_FILE"
-        log 4 "fetch_source: copy local file to '$dst'"
-        copy_if_needed "$_FILE" "$dst"
+
+        log 3 "${TXT_BLUE}using local source: ${TXT_LIGHT_GREY}$_FILE${TXT_N_C}"
+
+        FETCH_SOURCE_PATH="$_FILE"
         return 0
     fi
 
     if [ "$_SECONDS" -eq 0 ]; then
-        log 3 "Downloading: $_URL"
-        log 4 "fetch_source: cache disabled (_SECONDS=0)"
-        download_file "$_URL" "$dst"
+
+        log 3 "${TXT_BLUE}Downloading: ${TXT_LIGHT_GREY}$_URL${TXT_N_C}"
+
+        log 4 "${TXT_GREY}fetch_source: cache disabled (_SECONDS=${TXT_LIGHT_GREY}0${TXT_GREY})${TXT_N_C}"
+
+        download_file "$_URL" "$dst" || return 1
+
+        case "$_URL" in
+            *.zip)
+
+                validate_zip_file "$dst" || {
+
+                    log 1 "${TXT_RED}downloaded zip failed integrity check: ${TXT_LIGHT_GREY}$_URL${TXT_N_C}"
+
+                    return 1
+                }
+                ;;
+        esac
+
+        FETCH_SOURCE_PATH="$dst"
         return 0
     fi
 
-    mkdir -p "$_DIRECTORY"
+    mkdir -p "$_DIRECTORY" || {
+
+        log 1 "${TXT_RED}failed to create cache directory: ${TXT_LIGHT_GREY}$_DIRECTORY${TXT_N_C}"
+
+        return 1
+    }
 
     key="$(cache_key "$_URL")"
     cache_raw="$_DIRECTORY/$key.raw"
     cache_stamp="$_DIRECTORY/$key.stamp"
     now="$(( $(now_ms) / 1000 ))"
-    log 4 "fetch_source: key=$key cache_raw='$cache_raw' cache_stamp='$cache_stamp' now=$now"
+
+    log 4 "${TXT_GREY}fetch_source: key=${TXT_LIGHT_GREY}$key ${TXT_GREY}cache_raw=${TXT_LIGHT_GREY}$cache_raw ${TXT_GREY}cache_stamp=${TXT_LIGHT_GREY}$cache_stamp ${TXT_GREY}now=${TXT_LIGHT_GREY}$now${TXT_N_C}"
 
     if [ -f "$cache_raw" ] && [ -f "$cache_stamp" ]; then
         cached_at="$(cat "$cache_stamp" 2>/dev/null || printf '0')"
@@ -1190,27 +1440,79 @@ fetch_source() {
         esac
 
         CACHE_AGE=$((now - cached_at))
-        log 4 "fetch_source: cache candidate age=$CACHE_AGE ttl=$_SECONDS"
+
+        log 4 "${TXT_GREY}fetch_source: cache candidate age=${TXT_LIGHT_GREY}$CACHE_AGE ${TXT_GREY}ttl=${TXT_LIGHT_GREY}$_SECONDS${TXT_N_C}"
 
         if [ "$CACHE_AGE" -lt "$_SECONDS" ]; then
-            USING_CACHE="1"
-            log 4 "fetch_source: cache hit"
-            copy_if_needed "$cache_raw" "$dst"
+
+            log 4 "${TXT_GREY}fetch_source: cache hit${TXT_N_C}"
+
+            FETCH_SOURCE_PATH="$cache_raw"
             return 0
         fi
 
-        log 4 "fetch_source: cache stale"
+        log 4 "${TXT_GREY}fetch_source: cache stale${TXT_N_C}"
 
     fi
 
-    log 3 "Downloading: $_URL"
-    log 4 "fetch_source: downloading fresh copy"
-    download_file "$_URL" "$cache_raw"
-    printf '%s\n' "$now" > "$cache_stamp"
-    copy_if_needed "$cache_raw" "$dst"
+    log 3 "${TXT_BLUE}Downloading: ${TXT_LIGHT_GREY}$_URL${TXT_N_C}"
+
+    log 4 "${TXT_GREY}fetch_source: downloading to temp before promoting to cache${TXT_N_C}"
+
+    cache_tmp="${cache_raw}.tmp.$$"
+    FETCH_CACHE_TMP="$cache_tmp"
+
+    download_file "$_URL" "$cache_tmp" || {
+
+        rm -f "$cache_tmp"
+
+        FETCH_CACHE_TMP=""
+        return 1
+    }
+
+    case "$_URL" in
+        *.zip)
+
+            validate_zip_file "$cache_tmp" || {
+
+                log 1 "${TXT_RED}downloaded zip failed integrity check, discarding: ${TXT_LIGHT_GREY}$_URL${TXT_N_C}"
+
+                rm -f "$cache_tmp"
+
+                FETCH_CACHE_TMP=""
+                return 1
+            }
+
+            log 4 "${TXT_GREY}fetch_source: zip integrity okay${TXT_N_C}"
+
+            ;;
+    esac
+
+    mv "$cache_tmp" "$cache_raw" || {
+
+        log 1 "${TXT_RED}failed to promote download to cache: ${TXT_LIGHT_GREY}$_URL ${TXT_RED}-> ${TXT_LIGHT_GREY}$cache_raw${TXT_N_C}"
+
+        rm -f "$cache_tmp"
+
+        FETCH_CACHE_TMP=""
+        return 1
+    }
+
+    FETCH_CACHE_TMP=""
+
+    printf '%s\n' "$now" > "$cache_stamp" || {
+
+        log 1 "${TXT_RED}failed to write cache stamp: ${TXT_LIGHT_GREY}$cache_stamp${TXT_N_C}"
+
+        return 1
+    }
+
+    FETCH_SOURCE_PATH="$cache_raw"
+    return 0
 }
 
 extract_domains() {
+
     awk -F',' -v fmt="$_FORMAT" -v col="$_COLUMN" '
         function norm(x) {
             gsub(/\r/, "", x)
@@ -1221,8 +1523,28 @@ extract_domains() {
             return x
         }
 
-        function is_domain(x) {
-            return (x ~ /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)
+        function is_domain(x, n, i, lab) {
+            if (x == "") return 0
+
+            if (length(x) > 253) return 0
+
+            if (x ~ /\.\./) return 0
+
+            n=split(x, a, ".")
+
+            for (i=1; i<=n; i++) {
+                lab=a[i]
+
+                if (lab == "") return 0
+
+                if (length(lab) > 63) return 0
+
+                if (lab !~ /^[a-z0-9-]+$/) return 0
+
+                if (lab ~ /^-/ || lab ~ /-$/) return 0
+            }
+
+            return 1
         }
 
         {
@@ -1280,9 +1602,11 @@ extract_domains() {
 
         }
     '
+
 }
 
 extract_custom_domains() {
+
     awk '
         function norm(x) {
             gsub(/\r/, "", x)
@@ -1294,8 +1618,28 @@ extract_custom_domains() {
             return x
         }
 
-        function is_domain(x) {
-            return (x ~ /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)
+        function is_domain(x, n, i, lab) {
+            if (x == "") return 0
+
+            if (length(x) > 253) return 0
+
+            if (x ~ /\.\./) return 0
+
+            n=split(x, a, ".")
+
+            for (i=1; i<=n; i++) {
+                lab=a[i]
+
+                if (lab == "") return 0
+
+                if (length(lab) > 63) return 0
+
+                if (lab !~ /^[a-z0-9-]+$/) return 0
+
+                if (lab ~ /^-/ || lab ~ /-$/) return 0
+            }
+
+            return 1
         }
 
         {
@@ -1307,6 +1651,7 @@ extract_custom_domains() {
 
         }
     '
+
 }
 
 choose_tool() {
@@ -1319,24 +1664,63 @@ choose_tool() {
             elif need_cmd nslookup; then
                 _BINARY="nslookup"
             else
-                log 1 "need dig or nslookup for querying"
+
+                log 1 "${TXT_RED}need dig or nslookup for querying${TXT_N_C}"
+
                 return 1
             fi
 
             ;;
         dig)
-            need_cmd dig || { log 1 "dig not found"; return 1; }
+
+            need_cmd dig || { log 1 "${TXT_RED}dig not found${TXT_N_C}"; return 1; }
+
             ;;
         nslookup)
-            need_cmd nslookup || { log 1 "nslookup not found"; return 1; }
+
+            need_cmd nslookup || { log 1 "${TXT_RED}nslookup not found${TXT_N_C}"; return 1; }
+
             ;;
         *)
-            log 1 "_BINARY must be one (1) of auto|dig|nslookup, got: $_BINARY"
+
+            log 1 "${TXT_RED}_BINARY must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}auto${TXT_RED}|${TXT_LIGHT_GREY}dig${TXT_RED}|${TXT_LIGHT_GREY}nslookup${TXT_RED}, got: ${TXT_LIGHT_GREY}$_BINARY${TXT_N_C}"
+
             return 1
             ;;
     esac
 
-    log 4 "choose_tool: using '$_BINARY' for DNS queries"
+    log 4 "${TXT_GREY}choose_tool: using ${TXT_LIGHT_GREY}$_BINARY ${TXT_GREY}for DNS queries${TXT_N_C}"
+
+}
+
+make_tmpdir() {
+    base="${1:-${TMPDIR:-/tmp}}"
+
+    if need_cmd mktemp; then
+        d="$(mktemp -d "$base/dndistress.XXXXXX" 2>/dev/null || true)"
+
+        if [ -n "$d" ] && [ -d "$d" ]; then
+            printf '%s\n' "$d"
+            return 0
+        fi
+
+    fi
+
+    umask 077
+    i=0
+
+    while [ "$i" -lt 1000 ]; do
+        d="$base/dndistress.$$.$i"
+
+        if mkdir "$d" 2>/dev/null; then
+            printf '%s\n' "$d"
+            return 0
+        fi
+
+        i=$((i + 1))
+    done
+
+    return 1
 }
 
 query_one() {
@@ -1344,24 +1728,41 @@ query_one() {
 
     case "$_BINARY" in
         dig)
-
             if [ "$_OUTPUT" = "answer" ]; then
-                dig @"$RESOLVER" -p "$_PORT" "$d" "$_TYPE" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null | awk 'NF'
-            else
-                dig @"$RESOLVER" -p "$_PORT" "$d" "$_TYPE" +short +time=1 +tries=1 +retry=0 +notcp +ignore >/dev/null 2>&1 || true
-            fi
 
+                dig @"$RESOLVER" -p "$_PORT" "$d" "$_TYPE" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null | \
+
+                    tee -a "$ANSWERS_FILE" | \
+
+                    awk -v TXT_GREY="$TXT_GREY" -v TXT_N_C="$TXT_N_C" 'NF { print "   " TXT_GREY "•" TXT_N_C " " $0 }'
+            else
+
+                dig @"$RESOLVER" -p "$_PORT" "$d" "$_TYPE" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null >> "$ANSWERS_FILE"
+
+            fi
             ;;
         nslookup)
-
             if [ "$_OUTPUT" = "answer" ]; then
-                nslookup -port="$_PORT" -type="$_TYPE" "$d" "$RESOLVER" 2>/dev/null | awk '
-                    /^Name:/ { seen=1; next }
-                    seen && /^Address: /   { sub(/^Address: /,""); print }
-                    seen && /^Addresses: / { sub(/^Addresses: /,""); print }
-                '
+
+                nslookup -port="$_PORT" -type="$_TYPE" "$d" "$RESOLVER" 2>/dev/null | \
+
+                    awk '
+                        /^Name:/ { seen=1; next }
+                        seen && /^Address: /   { sub(/^Address: /,""); print $0 }
+                        seen && /^Addresses: / { sub(/^Addresses: /,""); print $0 }
+                    ' | tee -a "$ANSWERS_FILE" | \
+
+                    awk -v TXT_GREY="$TXT_GREY" -v TXT_N_C="$TXT_N_C" 'NF { print "   " TXT_GREY "•" TXT_N_C " " $0 }'
+
             else
-                nslookup -port="$_PORT" -type="$_TYPE" "$d" "$RESOLVER" >/dev/null 2>&1 || true
+
+                nslookup -port="$_PORT" -type="$_TYPE" "$d" "$RESOLVER" 2>/dev/null | \
+
+                    awk '
+                        /^Name:/ { seen=1; next }
+                        seen && /^Address: /   { sub(/^Address: /,""); print $0 }
+                        seen && /^Addresses: / { sub(/^Addresses: /,""); print $0 }
+                    ' >> "$ANSWERS_FILE"
             fi
 
             ;;
@@ -1378,10 +1779,15 @@ start_worker_pool() {
     QUEUE_FIFO="$TMPDIR/queue.fifo"
 
     rm -f "$QUEUE_FIFO"
-    mkfifo "$QUEUE_FIFO" || { log 1 "failed to create queue fifo: $QUEUE_FIFO"; return 1; }
-    log 4 "start_worker_pool: workers=$workers fifo='$QUEUE_FIFO'"
+
+    mkfifo "$QUEUE_FIFO" || { log 0 "${TXT_BOLD}${TXT_RED}failed to create queue fifo: ${TXT_LIGHT_GREY}$QUEUE_FIFO${TXT_N_C}"
+        return 1
+    }
+
+    log 4 "${TXT_GREY}start_worker_pool: workers=${TXT_LIGHT_GREY}$workers ${TXT_GREY}fifo=${TXT_LIGHT_GREY}$QUEUE_FIFO${TXT_N_C}"
 
     i=0
+
     while [ "$i" -lt "$workers" ]; do
         (
             while IFS= read -r d; do
@@ -1389,41 +1795,51 @@ start_worker_pool() {
                 [ -n "$d" ] || continue
 
                 query_one "$d"
+
             done < "$QUEUE_FIFO"
 
         ) &
         WORKER_PIDS="$WORKER_PIDS $!"
-        log 4 "start_worker_pool: started worker pid=$!"
+
+        log 4 "${TXT_GREY}start_worker_pool: started worker pid=${TXT_LIGHT_GREY}$!${TXT_N_C}"
+
         i=$((i + 1))
     done
 
-    exec 4> "$QUEUE_FIFO"
+    exec 4> "$QUEUE_FIFO" || {
+
+        log 0 "${TXT_BOLD}${TXT_RED}failed to open queue writer fd: ${TXT_LIGHT_GREY}$QUEUE_FIFO${TXT_N_C}"
+
+        return 1
+    }
+
     WRITER_FD_OPEN=1
     return 0
 }
 
-seen_l=0
-seen_r=0
-seen_C=0
+SEEN_L=0
+SEEN_R=0
+SEEN_C=0
 SEEN_NONEXCLUSIVE=0
 
 print_version() {
-    printf '%s\n' "DNdistresS version $VERSION"
+    printf '%s\n' "$NAME $VERSION $BRANCH"
 }
 
 print_start_notice() {
 
-    [ -t 1 ] || return 0
+    [ -t 2 ] || return 0
 
     [ "$_VERBOSITY" -ge 3 ] || return 0
 
     print_banner >&2
+
     cat >&2 <<EOF
     Version: $VERSION
     Contact: $CONTACT
     License: $LICENSE
 
-    DNdistresS Copyright (C) $COPYRIGHT_YEAR  $AUTHOR_NAME
+    $NAME $COPYRIGHT_YEAR $AUTHOR_NAME
 
     This program comes with ABSOLUTELY NO WARRANTY; for details type 'show w'.
     This is free software, and you are welcome to redistribute it
@@ -1431,6 +1847,1215 @@ print_start_notice() {
 
 EOF
 }
+
+_MODE="none"
+
+set_mode() {
+    _req="$1"
+
+    if [ "$_MODE" != "none" ] && [ "$_MODE" != "$_req" ]; then
+
+        log 1 "${TXT_LIGHT_GREY}install${TXT_RED} and ${TXT_LIGHT_GREY}uninstall${TXT_RED} are mutually exclusive${TXT_N_C}"
+
+        exit_with_status 2
+
+    fi
+
+    _MODE="$_req"
+}
+
+need_optarg() {
+    opt="$1"
+
+    [ "$#" -ge 2 ] || { log 1 "${TXT_RED}missing argument for option: ${TXT_LIGHT_GREY}$opt${TXT_N_C}"
+
+        exit_with_status 2
+
+    }
+
+}
+
+help_topics() {
+
+    [ "$_VERBOSITY" -ge 3 ] && print_banner
+
+    cat <<'EOF'
+Help topics:
+
+  General:
+    general usage topics info description runtime resolver domains status
+
+  Commands:
+    install uninstall show version help
+
+  Options:
+    binary burst column custom directory duration file format
+    local location maximum force-maximum output port qps remote seconds
+    top type url verbosity
+
+Aliases accepted:
+  -i/--install, -u/--uninstall, -v/--version, -h/--help, -S/--show,
+  --show-warranty, --show-conditions, --force-maximum,
+  -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-r/-s/-t/-T/-U/-V
+EOF
+}
+
+collect_script_metrics() {
+    UNKNOWN_METRIC="unknown (something went wrong)"
+
+    awk '
+        BEGIN { in_metrics_fn=0; brace=0; in_awk=0; awk_block_len=0; max_awk_block=0 }
+        function brace_delta(s, t, o, c) {
+            t=s; o=gsub(/\{/, "{", t)
+            t=s; c=gsub(/\}/, "}", t)
+            return (o-c)
+        }
+
+        {
+
+            char_total += length($0)
+
+            if (!in_metrics_fn && $0 ~ /^[[:space:]]*collect_script_metrics[[:space:]]*\(\)[[:space:]]*\{[[:space:]]*$/) {
+                in_metrics_fn=1
+                brace=1
+            } else if (in_metrics_fn) {
+                brace += brace_delta($0)
+                if (brace <= 0) in_metrics_fn=0
+            }
+
+            line=$0
+
+            if (length(line) > max_line_len) max_line_len = length(line)
+
+            if (line ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{[[:space:]]*$/) {
+                fn_nesting++
+                if (fn_nesting > max_fn_nesting) max_fn_nesting = fn_nesting
+            }
+
+            if (line ~ /^[[:space:]]*\}[[:space:]]*$/ && fn_nesting > 0) {
+                fn_nesting--
+            }
+
+            if (!in_fn) {
+
+                if (line ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{[[:space:]]*$/) {
+                    in_fn=1
+                    fn_count++
+                    cur_fn_len=1
+                    fn_depth=brace_delta(line)
+
+                    if (fn_depth <= 0) {
+                        fn_total += cur_fn_len
+
+                        if (cur_fn_len > fn_max) fn_max=cur_fn_len
+
+                        in_fn=0; cur_fn_len=0; fn_depth=0
+                    }
+
+                }
+            } else {
+                cur_fn_len++
+                fn_depth += brace_delta(line)
+
+                if (fn_depth <= 0) {
+                    fn_total += cur_fn_len
+                    if (cur_fn_len > fn_max) fn_max=cur_fn_len
+                    in_fn=0; cur_fn_len=0; fn_depth=0
+                }
+
+            }
+
+            tmp=line
+
+            while (match(tmp, /(^|[[:space:];(])(export[[:space:]]+|readonly[[:space:]]+|local[[:space:]]+|typeset[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=/)) {
+                seg=substr(tmp, RSTART, RLENGTH)
+                sub(/.*[[:space:];(]/, "", seg)
+                sub(/^(export|readonly|local|typeset)[[:space:]]+/, "", seg)
+                sub(/=.*/, "", seg)
+
+                if (seg ~ /^[A-Za-z_][A-Za-z0-9_]*$/) seen[seg]=1
+
+                tmp=substr(tmp, RSTART+RLENGTH)
+            }
+
+            tmp=line
+
+            while (match(tmp, /\$\{[A-Za-z_][A-Za-z0-9_]*/)) {
+                v=substr(tmp, RSTART+2, RLENGTH-2)
+                seen[v]=1
+                tmp=substr(tmp, RSTART+RLENGTH)
+            }
+
+            tmp=line
+
+            while (match(tmp, /\$[A-Za-z_][A-Za-z0-9_]*/)) {
+                v=substr(tmp, RSTART+1, RLENGTH-1)
+                seen[v]=1
+                tmp=substr(tmp, RSTART+RLENGTH)
+            }
+
+            if (line ~ /^[[:space:]]*$/) {
+                blank++
+                next
+            }
+
+            nonblank++
+
+            is_shebang   = (NR == 1 && line ~ /^#!/)
+
+            is_directive = (!is_shebang && line ~ /^[[:space:]]*#[[:space:]]*shellcheck([[:space:]]|$)/)
+
+            is_comment   = (!is_shebang && !is_directive && line ~ /^[[:space:]]*#/)
+
+            if (is_directive) directives++
+
+            if (is_comment)   comments++
+
+            if (!is_comment && !is_directive) {
+
+                if (line ~ /^[[:space:]]*case[[:space:]].*[[:space:]]*in[[:space:]]*$/) case_count++
+
+                tmp=line
+
+                while (match(tmp, /;;/)) { arms++; tmp=substr(tmp, RSTART+RLENGTH) }
+
+                if (line ~ /^[[:space:]]*for[[:space:]].*;[[:space:]]*do([[:space:]]*#.*)?$/)        loop_count++
+
+                else if (line ~ /^[[:space:]]*while[[:space:]].*;[[:space:]]*do([[:space:]]*#.*)?$/) loop_count++
+
+            }
+
+            if (!is_comment && !is_directive) {
+                tmp=line
+
+                while (match(tmp, /\|[^|]/)) { pipes++; tmp=substr(tmp, RSTART+RLENGTH) }
+
+                tmp=line
+
+                while (match(tmp, /\$\(/)) { subshells++; tmp=substr(tmp, RSTART+RLENGTH) }
+
+                tmp=line
+
+                while (match(tmp, /<<[-]?[[:space:]]*/)) {
+                    heredocs++
+                    tmp=substr(tmp, RSTART+RLENGTH)
+                }
+
+            }
+
+            if (!in_awk && $0 ~ /awk[[:space:]]*(["'"'"']|<<)/) {
+                in_awk=1
+                awk_block_len=1
+            } else if (in_awk) {
+                awk_block_len++
+
+                if ($0 ~ /^(['"'"'"]|EOF|END)[[:space:]]*$/ || $0 ~ /'"'"'/ || $0 ~ /"/) {
+
+                    if (awk_block_len > max_awk_block) max_awk_block = awk_block_len
+
+                    in_awk=0
+                    awk_block_len=0
+                }
+
+            }
+
+            brace_depth += brace_delta(line)
+
+            if (brace_depth > max_brace_depth) max_brace_depth=brace_depth
+
+            tmp=line
+
+            while (match(tmp, /\$\(|[^$]\(|\)/)) {
+                tok=substr(tmp, RSTART, RLENGTH)
+
+                if (tok == ")") subshell_depth--
+
+                else subshell_depth++
+
+                if (subshell_depth > max_subshell_depth) max_subshell_depth=subshell_depth
+
+                if (subshell_depth < 0) subshell_depth=0
+
+                tmp=substr(tmp, RSTART+RLENGTH)
+            }
+
+            if (line ~ /^[[:space:]]*(\.|source)[[:space:]]+[A-Za-z0-9_\.\/-]+/) sourcing++
+
+            if (line ~ /^[[:space:]]*if[[:space:]]/ || line ~ /^[[:space:]]*elif[[:space:]]/ || line ~ /^[[:space:]]*else[[:space:]]*$/) ifs++
+
+            if (line ~ /(^|[[:space:];])exit[[:space:]]*[0-9]*/) exits++
+
+            if (line ~ /^[[:space:]]*trap[[:space:]]/) traps++
+
+            if (!in_metrics_fn && line ~ /#.*(TODO|FIXME|NOTE)/) todos++
+
+        }
+
+        END {
+            vars=0
+            for (k in seen) vars++
+            total = nonblank + blank
+
+            if (fn_count > 0) avg_fn = fn_total / fn_count
+            else avg_fn = 0
+
+            if (nonblank > 0) c_pct = (comments * 100.0) / nonblank
+            else c_pct = 0
+
+            if (case_count > 0) avg_arms = arms / case_count
+            else avg_arms = 0
+
+            max_depth = (max_brace_depth > max_subshell_depth) ? max_brace_depth : max_subshell_depth
+
+            printf "\
+Functions:             %d\n\
+Max function LOC:      %d\n\
+Average function LOC:  %.2f\n\
+Function nesting:      %d (maximum depth)\n\
+Variables:             %d (unique shell-style variables seen)\n\
+Total:                 %d (all lines)\n\
+Lines of code:         %d (excludes whitespace)\n\
+Blank:                 %d\n\
+Longest line:          %d\n\
+Characters:            %d\n\
+Comments:              %d (excludes shebang + shellcheck directives)\n\
+Shellcheck directives: %d (...and shellcheck is wrong about it)\n\
+Comment ratio:         %.2f%% (%d/%d regular comments/non-blank lines)\n\
+Case statements:       %d\n\
+Average case arms:     %.2f (;; per case statement)\n\
+Loops:                 %d (strict for/while ...; do)\n\
+Pipes:                 %d (| usage)\n\
+Subshells:             %d (\\$(...) usage)\n\
+Heredocs:              %d (<< usage)\n\
+Maximum awk block:     %d (lines in the largest awk block)\n\
+Maximum depth:         %d (maximum brace/subshell nesting depth)\n\
+Sourcing:              %d (. or source)\n\
+If/Elif/Else blocks:   %d\n\
+Exits:                 %d\n\
+Traps:                 %d\n\
+TODOs:                 %d (#TODO/FIXME/NOTE)\n", \
+fn_count+0, fn_max+0, avg_fn, max_fn_nesting+0, vars+0, total+0, nonblank+0, blank+0, max_line_len+0, char_total+0, comments+0, directives+0, c_pct, comments+0, nonblank+0, case_count+0, avg_arms, loop_count+0, pipes+0, subshells+0, heredocs+0, max_awk_block+0, max_depth+0, sourcing+0, ifs+0, exits+0, traps+0, todos+0
+        }
+    ' "$0" 2>/dev/null || printf '%s\n' \
+        "Functions:             $UNKNOWN_METRIC\n" \
+        "Max function LOC:      $UNKNOWN_METRIC\n" \
+        "Average function LOC:  $UNKNOWN_METRIC\n" \
+        "Function nesting:      $UNKNOWN_METRIC\n" \
+        "Variables:             $UNKNOWN_METRIC\n" \
+        "Total:                 $UNKNOWN_METRIC\n" \
+        "Lines of code:         $UNKNOWN_METRIC\n" \
+        "Blank:                 $UNKNOWN_METRIC\n" \
+        "Longest line:          $UNKNOWN_METRIC\n" \
+        "Characters:            $UNKNOWN_METRIC\n" \
+        "Comments:              $UNKNOWN_METRIC\n" \
+        "Shellcheck directives: $UNKNOWN_METRIC\n" \
+        "Comment ratio:         $UNKNOWN_METRIC\n" \
+        "Case statements:       $UNKNOWN_METRIC\n" \
+        "Average case arms:     $UNKNOWN_METRIC\n" \
+        "Loops:                 $UNKNOWN_METRIC\n" \
+        "Pipes:                 $UNKNOWN_METRIC\n" \
+        "Subshells:             $UNKNOWN_METRIC\n" \
+        "Heredocs:              $UNKNOWN_METRIC\n" \
+        "Maximum awk block:     $UNKNOWN_METRIC\n" \
+        "Maximum depth:         $UNKNOWN_METRIC\n" \
+        "Sourcing:              $UNKNOWN_METRIC\n" \
+        "If/Elif/Else blocks:   $UNKNOWN_METRIC\n" \
+        "Exits:                 $UNKNOWN_METRIC\n" \
+        "Traps:                 $UNKNOWN_METRIC\n" \
+        "TODOs:                 $UNKNOWN_METRIC\n"
+}
+
+usage() {
+
+    [ "$_VERBOSITY" -ge 3 ] && print_banner
+
+    prog_name="${0##*/}"
+
+    awk -v prog="$prog_name" -v syn="$SYNOPSIS" -v cols="${COLUMNS:-80}" '
+        BEGIN {
+            print "Usage:"
+            head = "  " prog " "
+            ind  = sprintf("%" length(head) "s", "")
+            line = head
+            s    = syn
+            while (length(s) > 0) {
+                if (substr(s,1,1) != "[") break
+                depth = 0
+                tok = ""
+                for (i = 1; i <= length(s); i++) {
+                    c = substr(s, i, 1)
+                    tok = tok c
+                    if (c == "[") depth++
+                    else if (c == "]") { depth--; if (depth == 0) break }
+                }
+                s = substr(s, length(tok) + 1)
+                sub(/^[[:space:]]+/, "", s)
+                cand = (line == head) ? line tok : line " " tok
+                if (length(cand) + 2 > cols) {
+                    printf "%s \\\n", line
+                    line = ind tok
+                } else {
+                    line = cand
+                }
+            }
+            print line
+            print ""
+            print "  " prog " --help [topic]"
+            print "  " prog " help [topic]"
+            print "  " prog " install [PATH]"
+            print "  " prog " uninstall [PATH]"
+            print "  " prog " show {w|c|warranty|conditions}"
+            print "  " prog " --show {w|c|warranty|conditions}"
+            print "  " prog " --show-warranty"
+            print "  " prog " --show-conditions"
+        }
+    '
+
+    cat <<EOF
+
+Help:
+  -h, --help [topic]
+
+  help [topic]
+      Show help for a specific topic. Topic can be a command or option.
+
+      Reverse parsing is supported (examples):
+        ${0##*/} --help --install
+        ${0##*/} --install --help
+        ${0##*/} --help -q
+        ${0##*/} -q --help
+
+Topic examples:
+  install, uninstall, show, version, verbosity
+
+Tip:
+  Run '${0##*/} --help topics' to list all available topics.
+EOF
+}
+
+parse_top_opt() {
+    _t_count=""
+    _t_filters=""
+
+    for _t_arg in "$@"; do
+        case "$_t_arg" in
+            /*/)
+                _t_filters="${_t_filters:+$_t_filters }$_t_arg"
+                ;;
+            '||'*)
+                _t_filters="${_t_filters:+$_t_filters }$_t_arg"
+                ;;
+            ^*)
+                _t_filters="${_t_filters:+$_t_filters }$_t_arg"
+                ;;
+            .*)
+                _t_filters="${_t_filters:+$_t_filters }$_t_arg"
+                ;;
+            *[!0-9]*)
+                _t_filters="${_t_filters:+$_t_filters }$_t_arg"
+                ;;
+            ''|0)
+
+                log 1 "${TXT_RED}invalid count value for ${TXT_LIGHT_GREY}-t${TXT_RED}/${TXT_LIGHT_GREY}--top${TXT_RED}: ${TXT_LIGHT_GREY}$_t_arg${TXT_N_C}"
+
+                return 1
+                ;;
+            *)
+
+                [ -z "$_t_count" ] || { log 1 "${TXT_RED}multiple count values supplied to ${TXT_LIGHT_GREY}-t${TXT_RED}/${TXT_LIGHT_GREY}--top${TXT_RED}: ${TXT_LIGHT_GREY}$_t_count and $_t_arg${TXT_N_C}"
+                    return 1
+                }
+
+                _t_count="$_t_arg"
+                ;;
+        esac
+    done
+
+    [ -n "$_t_count" ] || { log 1 "${TXT_LIGHT_GREY}-t${TXT_RED}/${TXT_LIGHT_GREY}--top ${TXT_RED}requires a positive integer count argument${TXT_N_C}"
+        return 1
+    }
+
+    printf '%s\n' "$_t_count"
+    printf '%s\n' "$_t_filters"
+    return 0
+}
+
+show_help_topic() {
+    topic="${1:-general}"
+
+    case "$topic" in
+        general|usage)
+
+            usage
+
+            ;;
+        topics)
+
+            help_topics
+
+            ;;
+        info)
+            _METRICS="$(collect_script_metrics)"
+
+            cat <<EOF
+Topic: info
+
+Name:             $NAME
+
+Version:          $VERSION
+Branch:           $BRANCH
+
+License:          $LICENSE
+
+Contact:          $CONTACT
+Copyright:        $AUTHOR_NAME $COPYRIGHT_YEAR
+
+Script:           $SCRIPT_NAME
+$_METRICS
+
+Run '${0##*/} --help general' for usage overview.
+Run '${0##*/} --help description' for technical detail.
+EOF
+
+            ;;
+        description)
+
+            cat <<EOF
+Topic: description
+
+$NAME continuously (or time-bounded) sends DNS queries from a prepared
+domain list, using a token-bucket scheduler and a worker pool.
+
+Key properties:
+  - Deterministic rate shaping via qps + burst
+  - Parallel execution via maximum workers
+  - Flexible source handling (download/cache/file/custom list)
+  - Resolver targeting (local/remote, IPv4/IPv6, optional port override)
+  - Query tool selection (dig/nslookup) and RR type selection
+
+An impractically complex resolver workload tool for controlled DNS traffic
+generation.
+EOF
+
+            ;;
+        runtime)
+
+            cat <<EOF
+Topic: runtime
+
+Data path:
+  source (url/file/custom) -> parse -> dedupe -> top-N -> dispatch -> workers
+
+Primary controls:
+  -q/--qps          tokens per second
+  -B/--burst        burst ceiling
+  -m/--maximum      worker count
+  -D/--duration     runtime seconds (0 = forever)
+  -o/--output       quiet|answer
+
+Secondary controls:
+  --force-maximum   override default max worker clamp (128)
+
+Timer guard:
+  When running under ${UNIT_BASE}.service from ${UNIT_BASE}.timer,
+  _DURATION is clamped to the timer period (OnUnitActiveSec).
+  _DURATION=0 is also clamped (not treated as infinite).
+EOF
+
+            ;;
+        resolver)
+
+            cat <<EOF
+Topic: resolver
+
+Resolver controls:
+  -L/--location     local|remote
+  -l/--local        local resolver address
+  -r/--remote       remote resolver address
+  -p/--port         DNS port (1..65535)
+
+Address forms accepted by -l/-r:
+  IPv4
+  IPv6
+  host#port
+  [ipv6]:port
+EOF
+            ;;
+        status)
+
+            cat <<EOF
+Topic: status
+
+Purpose:
+  When enabled, DNdistresS writes a JSON status and metrics file on exit
+  (via the exit_with_status function). This file can be used for monitoring,
+  automation, or integration with external systems.
+
+How to enable:
+  1. Set the environment variable _STATUS_ENABLED=1
+  2. Run DNdistresS as its own systemd service (${UNIT_BASE}.service)
+
+When both conditions are met, a status file is written to:
+  \$_STATUS_FILE (default: /var/lib/dndistress/status/dndistress-status.json)
+
+The file contains:
+  - Exit code and timestamp
+  - Runtime metrics (queries sent, QPS, etc)
+  - Effective configuration
+
+Status reporting is only active when both _STATUS_ENABLED=1 and the script
+is running under its own service unit.
+
+Related variables:
+  _STATUS_ENABLED   Enables/disables status reporting (default: 0)
+  _STATUS_DIR       Directory for status file
+                    (default: /var/lib/dndistress/status)
+  _STATUS_FILE      Path to status file
+                    (default: \$_STATUS_DIR/dndistress-status.json)
+  _LOCK_DIR         Directory for status file lock (default: /var/lock)
+  _LOCK_FILE        Lock file path
+                    (default: \$_LOCK_DIR/dndistress-status.lock)
+
+Note:
+  You can override these variables via the environment to customize status file
+  location or locking behavior, the default paths are chosen to follow common
+  Linux filesystem conventions.
+
+  Since service read/write paths are controlled by the service unit
+  configuration, make sure to adjust the unit file if you change the default
+  paths for status or lock files to ensure the service has appropriate
+  permissions.
+
+  This may be performed manually or by (re)running the install command after
+  updating the variables in the script or via environment overrides.
+EOF
+            ;;
+        domains)
+
+            cat <<EOF
+Topic: domains
+
+Domain parsing/validation policy:
+
+  $NAME uses a pragmatic DNS hostname filter for workload hygiene.
+  It is intentionally not full RFC/IDN validation.
+
+Current behavior (summary):
+  - Lowercases input and trims one trailing dot.
+  - Rejects empty values, consecutive dots, overlong names (>253),
+    overlong labels (>63), non [a-z0-9-] label characters, and labels
+    that start/end with '-'.
+
+Rationale:
+  Keep parsing fast, predictable, and operationally useful for resolver
+  workload generation, without claiming strict standards completeness.
+EOF
+            ;;
+        install)
+
+            cat <<EOF
+Topic: install
+
+Usage:
+  ${0##*/} install [PATH]
+  ${0##*/} -i [PATH]
+  ${0##*/} --install [PATH]
+
+Default PATH: $_INSTALL
+
+Installs script + service + timer, then enables and starts ${UNIT_BASE}.timer.
+EOF
+
+            ;;
+        uninstall)
+
+            cat <<EOF
+Topic: uninstall
+
+Usage:
+  ${0##*/} uninstall [PATH]
+  ${0##*/} -u [PATH]
+  ${0##*/} --uninstall [PATH]
+
+Default PATH: $_UNINSTALL
+
+Removes script + service + timer, disables/stops units, daemon-reloads systemd.
+EOF
+
+            ;;
+        show)
+
+            cat <<'EOF'
+Topic: show
+
+Usage:
+  show {w|c|warranty|conditions}
+  -S {w|c|warranty|conditions}
+  --show {w|c|warranty|conditions}
+  --show-warranty
+  --show-conditions
+
+Meaning:
+  Show GPL warranty or GPL conditions excerpt.
+
+Examples:
+  dndistress show w
+  dndistress --show conditions
+  dndistress --show-warranty
+EOF
+
+            ;;
+        version)
+
+            cat <<'EOF'
+Topic: version
+
+Usage:
+  -v | --version | version
+
+Prints tool version and exits.
+EOF
+
+            ;;
+        binary)
+
+            cat <<EOF
+Topic: binary (-b, --binary)
+
+Values:
+  auto | dig | nslookup
+
+Default: $_BINARY
+
+auto selects dig first, then nslookup.
+EOF
+
+            ;;
+        burst)
+
+            cat <<EOF
+Topic: burst (-B, --burst)
+
+Meaning:
+  Max burst size for token bucket.
+
+Default: $_BURST
+
+Validation: positive integer.
+
+Note:
+  Runtime clamp applies: _BURST is capped at (_QPS * 2).
+EOF
+
+            ;;
+        column)
+
+            cat <<EOF
+Topic: column (-c, --column)
+
+Meaning:
+  CSV column index when reading file/url source.
+
+Default: $_COLUMN
+
+0 means auto-detect.
+
+Validation: non-negative integer.
+EOF
+
+            ;;
+        custom)
+
+            cat <<EOF
+Topic: custom (-C, --custom)
+
+Meaning:
+  Custom domain file prepended to primary source before dedupe/top-N.
+
+Default: $_CUSTOM
+EOF
+
+            ;;
+        directory)
+
+            cat <<EOF
+Topic: directory (-d, --directory)
+
+Meaning:
+  Cache/work directory for downloaded sources and cache files.
+
+Default: $_DIRECTORY
+EOF
+
+            ;;
+        duration)
+
+            cat <<EOF
+Topic: duration (-D, --duration)
+
+Meaning:
+  Runtime length in seconds.
+
+Default: $_DURATION
+
+0 = continuous loop.
+
+Note:
+  Also accepts plain seconds or human-readable duration (e.g. 1d 2h 3m 4s).
+
+Timer guard:
+  Under ${UNIT_BASE}.service + ${UNIT_BASE}.timer, _DURATION is clamped
+  to the timer period (OnUnitActiveSec), including _DURATION=0.
+  Optional override for period detection: _TIMER_PERIOD (duration syntax).
+EOF
+
+            ;;
+        file)
+
+            cat <<EOF
+Topic: file (-f, --file)
+
+Meaning:
+  Use local input file; overrides URL download path.
+
+Default: (empty)
+
+Must be readable.
+EOF
+
+            ;;
+        format)
+
+            cat <<EOF
+Topic: format (-F, --format)
+
+Values:
+  auto | plain | csv
+
+Default: $_FORMAT
+
+Note:
+  Domain validation is pragmatic (not full RFC/IDN validation).
+EOF
+
+            ;;
+        local)
+
+            cat <<EOF
+Topic: local resolver (-l, --local)
+
+Meaning:
+  Local resolver address. Also sets location=local.
+
+Accepted:
+  IPv4/IPv6, optional #port or [ipv6]:port.
+
+Default: $_LOCAL
+EOF
+
+            ;;
+        location)
+
+            cat <<EOF
+Topic: location (-L, --location)
+
+Values:
+  local | remote
+
+Default: $_LOCATION
+
+Controls whether _LOCAL or _REMOTE is used as resolver.
+EOF
+
+            ;;
+        maximum)
+
+            cat <<EOF
+Topic: maximum workers (-m, --maximum)
+
+Meaning:
+  Max concurrent query workers.
+
+Default: $_MAXIMUM
+
+Validation: positive integer, clamped to 128.
+
+Note:
+  By default, the maximum worker count is clamped to 128 to prevent runaway
+  resource usage. To override, append '!' to the value (e.g. -m 200!) or use
+  --force-maximum together with -m/--maximum (e.g. --m 500 --force-maximum).
+EOF
+
+            ;;
+        force-maximum)
+
+            cat <<EOF
+Topic: force-maximum (--force-maximum)
+
+Meaning:
+  Overrides the clamp on maximum worker count when used with -m/--maximum.
+
+Usage:
+  -m 200!
+  --maximum 200 --force-maximum
+EOF
+
+            ;;
+        output)
+
+            cat <<EOF
+Topic: output (-o, --output)
+
+Values:
+  quiet | answer
+
+Default: $_OUTPUT
+
+quiet suppresses answer output; answer prints response records.
+EOF
+
+            ;;
+        port)
+
+            cat <<EOF
+Topic: port (-p, --port)
+
+Meaning:
+  DNS service port used by query tool.
+
+Default: $_PORT
+
+Range: 1..65535.
+EOF
+
+            ;;
+        qps)
+
+            cat <<EOF
+Topic: qps (-q, --qps)
+
+Meaning:
+  Token refill rate (queries/sec target).
+
+Default: $_QPS
+
+Validation: positive integer.
+EOF
+
+            ;;
+        remote)
+
+            cat <<EOF
+Topic: remote resolver (-r, --remote)
+
+Meaning:
+  Remote resolver address. Also sets location=remote.
+
+Accepted:
+  IPv4/IPv6, optional #port or [ipv6]:port.
+
+Default: $_REMOTE
+EOF
+
+            ;;
+        seconds)
+
+            cat <<EOF
+Topic: seconds cache TTL (-s, --seconds)
+
+Meaning:
+  Cache TTL for downloaded source.
+
+Default: $_SECONDS
+
+0 disables cache.
+
+Note:
+  Also accepts plain seconds or human-readable duration (e.g. 5d 6h 7m 8s).
+EOF
+
+            ;;
+        top)
+
+            cat <<EOF
+Topic: top (-t, --top)
+
+Meaning:
+  Keep top N domains after dedupe, optionally filtered by one or more
+  patterns. Multiple patterns are OR-matched; a domain passes if any
+  pattern matches.
+
+Pattern forms:
+  .com          suffix match  (domain ends with .com)
+  ^google       prefix match  (domain starts with google)
+  google        substring match
+  ||google.com  adblock anchor (matches google.com and *.google.com)
+  /regex/       POSIX awk extended regex
+
+Usage:
+  -t (N|PATTERN)...
+
+Examples:
+  -t 5000
+  -t 5000 .com
+  -t 5000 .com .net .org
+  -t 1000 ||google.com
+  -t 2000 /\\.gov\\.au\$/
+  -t 5000 ^google ^facebook
+  -t .co.nz 1000
+
+Default count: $_TOP
+Default filters: (none)
+
+Validation: count is a positive integer; patterns are matched in order.
+EOF
+
+            ;;
+        type)
+
+            cat <<EOF
+Topic: type (-T, --type)
+
+Meaning:
+  DNS RR type for dig/nslookup (A, AAAA, MX, TXT, etc).
+
+Default: $_TYPE
+
+Also accepted:
+  Numeric RR type IDs (examples: 1, 28, 15, 65, 257).
+  Numeric IDs are mapped to known mnemonics.
+
+Note:
+  ANY is intentionally rejected (including ID 255).
+EOF
+
+            ;;
+        url)
+
+            cat <<EOF
+Topic: url (-U, --url)
+
+Meaning:
+  Source URL used when -f/--file is not provided.
+
+Default: $_URL
+EOF
+
+            ;;
+        verbosity)
+
+            cat <<EOF
+Topic: verbosity (-V, --verbosity)
+
+Values:
+  0=CRITICAL
+  1=ERROR
+  2=WARNING
+  3=INFO
+  4=DEBUG
+
+Note:
+  Runtime reports are displayed at verbosity levels 1 (ERROR) and higher,
+  with increasing detail at higher levels. Verbosity 0 (CRITICAL) suppresses
+  all runtime output, showing only critical failures that cause immediate
+  exit.
+
+Default: $_VERBOSITY
+EOF
+
+            ;;
+        *)
+
+            log 1 "${TXT_RED}unknown help topic: ${TXT_LIGHT_GREY}$topic${TXT_N_C}"
+
+            usage
+
+            return 2
+            ;;
+    esac
+
+}
+
+canonical_help_topic() {
+
+    case "$1" in
+        general|usage)
+            printf '%s\n' "general"
+            ;;
+        topics)
+            printf '%s\n' "topics"
+            ;;
+        info|about|whatis|purpose)
+            printf '%s\n' "info"
+            ;;
+        description|desc)
+            printf '%s\n' "description"
+            ;;
+        runtime|run)
+            printf '%s\n' "runtime"
+            ;;
+        resolver|dns)
+            printf '%s\n' "resolver"
+            ;;
+        status|_status|metrics|json-status)
+            printf '%s\n' "status"
+            ;;
+        domains|domain|hostname|hostnames|validation)
+            printf '%s\n' "domains"
+            ;;
+        install|-i|i|--install)
+            printf '%s\n' "install"
+            ;;
+        uninstall|-u|u|--uninstall)
+            printf '%s\n' "uninstall"
+            ;;
+        show|-S|S|--show|--show-warranty|--show-conditions)
+            printf '%s\n' "show"
+            ;;
+        version|-v|v|--version)
+            printf '%s\n' "version"
+            ;;
+        binary|-b|b|--binary)
+            printf '%s\n' "binary"
+            ;;
+        burst|-B|B|--burst)
+            printf '%s\n' "burst"
+            ;;
+        column|-c|c|--column)
+            printf '%s\n' "column"
+            ;;
+        custom|-C|C|--custom)
+            printf '%s\n' "custom"
+            ;;
+        directory|-d|d|--directory)
+            printf '%s\n' "directory"
+            ;;
+        duration|-D|D|--duration)
+            printf '%s\n' "duration"
+            ;;
+        file|-f|f|--file)
+            printf '%s\n' "file"
+            ;;
+        format|-F|F|--format)
+            printf '%s\n' "format"
+            ;;
+        local|-l|l|--local)
+            printf '%s\n' "local"
+            ;;
+        location|-L|L|--location)
+            printf '%s\n' "location"
+            ;;
+        maximum|-m|m|--maximum)
+            printf '%s\n' "maximum"
+            ;;
+        force-maximum|forcemax|--force-maximum)
+            printf '%s\n' "force-maximum"
+            ;;
+        output|-o|o|--output)
+            printf '%s\n' "output"
+            ;;
+        port|-p|p|--port)
+            printf '%s\n' "port"
+            ;;
+        qps|-q|q|--qps)
+            printf '%s\n' "qps"
+            ;;
+        remote|-r|r|--remote)
+            printf '%s\n' "remote"
+            ;;
+        seconds|-s|s|--seconds)
+            printf '%s\n' "seconds"
+            ;;
+        top|-t|t|--top)
+            printf '%s\n' "top"
+            ;;
+        type|-T|T|--type)
+            printf '%s\n' "type"
+            ;;
+        url|-U|U|--url)
+            printf '%s\n' "url"
+            ;;
+        verbosity|-V|V|--verbosity)
+            printf '%s\n' "verbosity"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+}
+
+HELP_REQUEST=0
+HELP_TOPIC=""
+HELP_AMBIGUOUS=0
+
+add_help_topic() {
+    t="$1"
+
+    [ -n "$t" ] || return 0
+
+    if [ -z "$HELP_TOPIC" ]; then
+        HELP_TOPIC="$t"
+        return 0
+    fi
+
+    [ "$HELP_TOPIC" = "$t" ] && return 0
+
+    HELP_AMBIGUOUS=1
+}
+
+scan_help_request() {
+    HELP_REQUEST=0
+    HELP_TOPIC="${HELP_TOPIC:-}"
+    HELP_AMBIGUOUS=0
+
+    for tok in "$@"; do
+
+        case "$tok" in
+            -h|h|--help|help)
+                HELP_REQUEST=1
+                break
+                ;;
+        esac
+
+    done
+
+    [ "$HELP_REQUEST" -eq 1 ] || return 0
+
+    for tok in "$@"; do
+
+        case "$tok" in
+            -h|h|--help|help)
+                continue
+                ;;
+        esac
+
+        if t="$(canonical_help_topic "$tok" 2>/dev/null)"; then
+
+            add_help_topic "$t"
+
+        fi
+
+    done
+
+    [ -n "$HELP_TOPIC" ] || HELP_TOPIC="general"
+
+}
+
+scan_help_request "$@"
+
+if [ "$HELP_REQUEST" -eq 1 ]; then
+
+    [ "$HELP_AMBIGUOUS" -eq 0 ] || { log 1 "${TXT_RED}ambiguous help request (multiple topics)${TXT_N_C}"
+
+        exit_with_status 2
+
+    }
+
+    show_help_topic "$HELP_TOPIC" | page_output
+
+    exit 0
+fi
 
 show_warranty() {
 
@@ -1623,737 +3248,212 @@ unpacking, reading or copying.
 EOF
 }
 
-_MODE="none"
+run_show_topic() {
+    case "${1:-}" in
+        w|warranty)
 
-set_mode() {
-    _req="$1"
+            show_warranty | page_output
 
-    if [ "$_MODE" != "none" ] && [ "$_MODE" != "$_req" ]; then
-        log 1 "install and uninstall are mutually exclusive"
-        exit 2
-    fi
-
-    _MODE="$_req"
-}
-
-need_optarg() {
-    opt="$1"
-
-    [ "$#" -ge 2 ] || { log 1 "missing argument for $opt"; exit 2; }
-
-}
-
-help_topics() {
-
-    [ "$_VERBOSITY" -ge 3 ] && print_banner
-
-    cat <<'EOF'
-Help topics:
-
-  General:
-    general usage topics info description runtime resolver
-
-  Commands:
-    install uninstall show version help
-
-  Options:
-    binary burst column custom directory duration file format
-    local location maximum output port qps remote seconds
-    top type url verbosity
-
-Aliases accepted:
-  -i/--install, -u/--uninstall, -v/--version, -h/--help, -S/--show,
-  --show-warranty, --show-conditions,
-  -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-r/-s/-t/-T/-U/-V
-EOF
-}
-
-show_help_topic() {
-    topic="${1:-general}"
-
-    case "$topic" in
-        general|usage)
-            usage
+            exit 0
             ;;
-        topics)
-            help_topics
-            ;;
-        info)
-            cat <<'EOF'
-Topic: info
+        c|conditions)
 
-DNdistresS is a DNS query workload generator/stressor.
+            show_conditions | page_output
 
-Intent:
-  Provide reproducible DNS query load against a chosen resolver,
-  with explicit control over request rate, burst behavior, runtime,
-  worker concurrency, and query type.
-
-Typical use:
-  - Resolver smoke/load testing
-  - Cache warmup exercises
-  - Throughput/latency behavior checks under steady or bursty load
-
-Data path:
-  source (url/file/custom) -> parse -> dedupe -> top-N -> dispatch -> query workers
-EOF
-            ;;
-        description)
-            cat <<'EOF'
-Topic: description
-
-DNdistresS continuously (or time-bounded) sends DNS queries from a prepared
-domain list, using a token-bucket scheduler and a worker pool.
-
-Key properties:
-  - Deterministic rate shaping via qps + burst
-  - Parallel execution via maximum workers
-  - Flexible source handling (download/cache/file/custom list)
-  - Resolver targeting (local/remote, IPv4/IPv6, optional port override)
-  - Query tool selection (dig/nslookup) and RR type selection
-
-A practical resolver workload tool for controlled DNS traffic generation.
-EOF
-            ;;
-        runtime)
-            cat <<EOF
-Topic: runtime
-
-Core execution path:
-  fetch source -> parse domains -> dedupe/top-N -> token-bucket dispatch -> DNS query workers
-
-Primary controls:
-  -q/--qps          tokens per second
-  -B/--burst        burst ceiling
-  -m/--maximum      worker count
-  -D/--duration     runtime seconds (0 = forever)
-  -o/--output       quiet|answer
-
-Timer guard:
-  When running under ${UNIT_BASE}.service from ${UNIT_BASE}.timer,
-  _DURATION is clamped to the timer period (OnUnitActiveSec).
-  _DURATION=0 is also clamped (not treated as infinite).
-EOF
-            ;;
-        resolver)
-            cat <<EOF
-Topic: resolver
-
-Resolver controls:
-  -L/--location     local|remote
-  -l/--local        local resolver address
-  -r/--remote       remote resolver address
-  -p/--port         DNS port (1..65535)
-
-Address forms accepted by -l/-r:
-  IPv4
-  IPv6
-  host#port
-  [ipv6]:port
-EOF
-            ;;
-        install)
-            cat <<EOF
-Topic: install
-
-Usage:
-  ${0##*/} install [PATH]
-  ${0##*/} -i [PATH]
-  ${0##*/} --install [PATH]
-
-Default PATH: $_INSTALL
-
-Installs script + service + timer, then enables and starts ${UNIT_BASE}.timer.
-EOF
-            ;;
-        uninstall)
-            cat <<EOF
-Topic: uninstall
-
-Usage:
-  ${0##*/} uninstall [PATH]
-  ${0##*/} -u [PATH]
-  ${0##*/} --uninstall [PATH]
-
-Default PATH: $_UNINSTALL
-
-Removes script + service + timer, disables/stops units, daemon-reloads systemd.
-EOF
-            ;;
-        show)
-            cat <<'EOF'
-Topic: show
-
-Usage:
-  show {w|c|warranty|conditions}
-  -S {w|c|warranty|conditions}
-  --show {w|c|warranty|conditions}
-  --show-warranty
-  --show-conditions
-
-Meaning:
-  Show GPL warranty or GPL conditions excerpt.
-
-Examples:
-  dndistress show w
-  dndistress --show conditions
-  dndistress --show-warranty
-EOF
-            ;;
-        version)
-            cat <<'EOF'
-Topic: version
-
-Usage:
-  -v | --version | version
-
-Prints tool version and exits.
-EOF
-            ;;
-        binary)
-            cat <<EOF
-Topic: binary (-b, --binary)
-
-Values:
-  auto | dig | nslookup
-
-Default: $_BINARY
-
-auto selects dig first, then nslookup.
-EOF
-            ;;
-        burst)
-            cat <<EOF
-Topic: burst (-B, --burst)
-
-Meaning:
-  Max burst size for token bucket.
-
-Default: $_BURST
-
-Validation: positive integer.
-EOF
-            ;;
-        column)
-            cat <<EOF
-Topic: column (-c, --column)
-
-Meaning:
-  CSV column index when reading file/url source.
-
-Default: $_COLUMN
-
-0 means auto-detect.
-
-Validation: non-negative integer.
-EOF
-            ;;
-        custom)
-            cat <<EOF
-Topic: custom (-C, --custom)
-
-Meaning:
-  Custom domain file prepended to primary source before dedupe/top-N.
-
-Default: $_CUSTOM
-EOF
-            ;;
-        directory)
-            cat <<EOF
-Topic: directory (-d, --directory)
-
-Meaning:
-  Cache/work directory for downloaded sources and cache files.
-
-Default: $_DIRECTORY
-EOF
-            ;;
-        duration)
-            cat <<EOF
-Topic: duration (-D, --duration)
-
-Meaning:
-  Runtime length in seconds.
-
-Default: $_DURATION
-
-0 = continuous loop.
-
-Note: Also accepts plain seconds or human-readable duration (e.g. 1d 2h 3m 4s).
-
-Timer guard:
-  Under ${UNIT_BASE}.service + ${UNIT_BASE}.timer, _DURATION is clamped
-  to the timer period (OnUnitActiveSec), including _DURATION=0.
-  Optional override for period detection: _TIMER_PERIOD (duration syntax).
-EOF
-            ;;
-        file)
-            cat <<EOF
-Topic: file (-f, --file)
-
-Meaning:
-  Use local input file; overrides URL download path.
-
-Default: (empty)
-
-Must be readable.
-EOF
-            ;;
-        format)
-            cat <<EOF
-Topic: format (-F, --format)
-
-Values:
-  auto | plain | csv
-
-Default: $_FORMAT
-EOF
-            ;;
-        local)
-            cat <<EOF
-Topic: local resolver (-l, --local)
-
-Meaning:
-  Local resolver address. Also sets location=local.
-
-Accepted:
-  IPv4/IPv6, optional #port or [ipv6]:port.
-
-Default: $_LOCAL
-EOF
-            ;;
-        location)
-            cat <<EOF
-Topic: location (-L, --location)
-
-Values:
-  local | remote
-
-Default: $_LOCATION
-
-Controls whether _LOCAL or _REMOTE is used as resolver.
-EOF
-            ;;
-        maximum)
-            cat <<EOF
-Topic: maximum workers (-m, --maximum)
-
-Meaning:
-  Max concurrent query workers.
-
-Default: $_MAXIMUM
-
-Validation: positive integer, clamped to 128.
-EOF
-            ;;
-        output)
-            cat <<EOF
-Topic: output (-o, --output)
-
-Values:
-  quiet | answer
-
-Default: $_OUTPUT
-
-quiet suppresses answer output; answer prints response records.
-EOF
-            ;;
-        port)
-            cat <<EOF
-Topic: port (-p, --port)
-
-Meaning:
-  DNS service port used by query tool.
-
-Default: $_PORT
-
-Range: 1..65535.
-EOF
-            ;;
-        qps)
-            cat <<EOF
-Topic: qps (-q, --qps)
-
-Meaning:
-  Token refill rate (queries/sec target).
-
-Default: $_QPS
-
-Validation: positive integer.
-EOF
-            ;;
-        remote)
-            cat <<EOF
-Topic: remote resolver (-r, --remote)
-
-Meaning:
-  Remote resolver address. Also sets location=remote.
-
-Accepted:
-  IPv4/IPv6, optional #port or [ipv6]:port.
-
-Default: $_REMOTE
-EOF
-            ;;
-        seconds)
-            cat <<EOF
-Topic: seconds cache TTL (-s, --seconds)
-
-Meaning:
-  Cache TTL for downloaded source.
-
-Default: $_SECONDS
-
-0 disables cache.
-
-Note: Also accepts plain seconds or human-readable duration (e.g. 5d 6h 7m 8s).
-EOF
-            ;;
-        top)
-            cat <<EOF
-Topic: top (-t, --top)
-
-Meaning:
-  Keep top N domains after dedupe.
-
-Default: $_TOP
-
-Validation: positive integer.
-EOF
-            ;;
-        type)
-            cat <<EOF
-Topic: type (-T, --type)
-
-Meaning:
-  DNS RR type for dig/nslookup (A, AAAA, MX, TXT, etc).
-
-Default: $_TYPE
-
-Also accepted:
-  Numeric RR type IDs (examples: 1, 28, 15, 65, 257).
-  Numeric IDs are mapped to known mnemonics.
-
-Note:
-  ANY is intentionally rejected (including ID 255).
-EOF
-            ;;
-        url)
-            cat <<EOF
-Topic: url (-U, --url)
-
-Meaning:
-  Source URL used when -f/--file is not provided.
-
-Default: $_URL
-EOF
-            ;;
-        verbosity)
-            cat <<EOF
-Topic: verbosity (-V, --verbosity)
-
-Values:
-  0=CRITICAL
-  1=ERROR
-  2=WARNING
-  3=INFO
-  4=DEBUG
-
-Default: $_VERBOSITY
-EOF
+            exit 0
             ;;
         *)
-            log 1 "unknown help topic: $topic"
-            usage
-            return 2
+            printf '%s\n' "Usage: ${0##*/} show {w|c|warranty|conditions}" >&2
+            
+            exit_with_status 2
+
             ;;
     esac
 
 }
-
-canonical_help_topic() {
-
-    case "$1" in
-        general|usage)
-            printf '%s\n' "general"
-            ;;
-        topics)
-            printf '%s\n' "topics"
-            ;;
-        info|about|whatis|purpose)
-            printf '%s\n' "info"
-            ;;
-        description|desc)
-            printf '%s\n' "description"
-            ;;
-        runtime|run)
-            printf '%s\n' "runtime"
-            ;;
-        resolver|dns)
-            printf '%s\n' "resolver"
-            ;;
-        install|-i|i|--install)
-            printf '%s\n' "install"
-            ;;
-        uninstall|-u|u|--uninstall)
-            printf '%s\n' "uninstall"
-            ;;
-        show|-S|S|--show|--show-warranty|--show-conditions)
-            printf '%s\n' "show"
-            ;;
-        version|-v|v|--version)
-            printf '%s\n' "version"
-            ;;
-        binary|-b|b|--binary)
-            printf '%s\n' "binary"
-            ;;
-        burst|-B|B|--burst)
-            printf '%s\n' "burst"
-            ;;
-        column|-c|c|--column)
-            printf '%s\n' "column"
-            ;;
-        custom|-C|C|--custom)
-            printf '%s\n' "custom"
-            ;;
-        directory|-d|d|--directory)
-            printf '%s\n' "directory"
-            ;;
-        duration|-D|D|--duration)
-            printf '%s\n' "duration"
-            ;;
-        file|-f|f|--file)
-            printf '%s\n' "file"
-            ;;
-        format|-F|F|--format)
-            printf '%s\n' "format"
-            ;;
-        local|-l|l|--local)
-            printf '%s\n' "local"
-            ;;
-        location|-L|L|--location)
-            printf '%s\n' "location"
-            ;;
-        maximum|-m|m|--maximum)
-            printf '%s\n' "maximum"
-            ;;
-        output|-o|o|--output)
-            printf '%s\n' "output"
-            ;;
-        port|-p|p|--port)
-            printf '%s\n' "port"
-            ;;
-        qps|-q|q|--qps)
-            printf '%s\n' "qps"
-            ;;
-        remote|-r|r|--remote)
-            printf '%s\n' "remote"
-            ;;
-        seconds|-s|s|--seconds)
-            printf '%s\n' "seconds"
-            ;;
-        top|-t|t|--top)
-            printf '%s\n' "top"
-            ;;
-        type|-T|T|--type)
-            printf '%s\n' "type"
-            ;;
-        url|-U|U|--url)
-            printf '%s\n' "url"
-            ;;
-        verbosity|-V|V|--verbosity)
-            printf '%s\n' "verbosity"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-
-}
-
-HELP_REQUEST=0
-HELP_TOPIC=""
-HELP_AMBIGUOUS=0
-
-add_help_topic() {
-    t="$1"
-
-    [ -n "$t" ] || return 0
-
-    if [ -z "$HELP_TOPIC" ]; then
-        HELP_TOPIC="$t"
-        return 0
-    fi
-
-    [ "$HELP_TOPIC" = "$t" ] && return 0
-
-    HELP_AMBIGUOUS=1
-}
-
-scan_help_request() {
-    HELP_REQUEST=0
-    HELP_TOPIC="${HELP_TOPIC:-}"
-    HELP_AMBIGUOUS=0
-
-    for tok in "$@"; do
-
-        case "$tok" in
-            -h|h|--help|help)
-                HELP_REQUEST=1
-                break
-                ;;
-        esac
-
-    done
-
-    [ "$HELP_REQUEST" -eq 1 ] || return 0
-
-    for tok in "$@"; do
-
-        case "$tok" in
-            -h|h|--help|help)
-                continue
-                ;;
-        esac
-
-        if t="$(canonical_help_topic "$tok" 2>/dev/null)"; then
-            add_help_topic "$t"
-        fi
-
-    done
-
-    [ -n "$HELP_TOPIC" ] || HELP_TOPIC="general"
-
-}
-
-scan_help_request "$@"
-
-if [ "$HELP_REQUEST" -eq 1 ]; then
-
-    [ "$HELP_AMBIGUOUS" -eq 0 ] || { log 1 "ambiguous help request (multiple topics)"; exit 2; }
-
-    show_help_topic "$HELP_TOPIC" | page_output
-    exit 0
-fi
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -h|h|--help|help)
+
             usage | page_output
+
             exit 0
             ;;
         -v|v|--version|version)
 
-            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "version cannot be combined with other options"; exit 2; }
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${TXT_RED}version cannot be combined with other options${TXT_N_C}"
+                
+                exit_with_status 2
 
-            [ "$#" -eq 1 ] || { log 1 "version must be used alone"; exit 2; }
+            }
+
+            [ "$#" -eq 1 ] || { log 1 "${TXT_RED}version must be used alone${TXT_N_C}"
+                
+                exit_with_status 2
+
+            }
 
             print_version
+
             exit 0
             ;;
         -S|S|--show|show)
 
-            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "show cannot be combined with other options"; exit 2; }
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${TXT_RED}show cannot be combined with other options${TXT_N_C}"
 
-            [ "$#" -eq 2 ] || { printf '%s\n' "Usage: ${0##*/} show {w|c|warranty|conditions}" >&2; exit 2; }
+                exit_with_status 2
+
+            }
+
+            [ "$#" -eq 2 ] || { printf '%s\n' "Usage: ${0##*/} show {w|c|warranty|conditions}" >&2
+
+                exit_with_status 2
+
+            }
 
             run_show_topic "$2"
+
             ;;
         --show-warranty)
 
-            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "show cannot be combined with other options"; exit 2; }
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${TXT_RED}show cannot be combined with other options${TXT_N_C}"
 
-            [ "$#" -eq 1 ] || { log 1 "--show-warranty must be used alone"; exit 2; }
+                exit_with_status 2
+
+            }
+
+            [ "$#" -eq 1 ] || { log 1 "${TXT_LIGHT_GREY}--show-warranty ${TXT_RED}must be used alone${TXT_N_C}"
+
+                exit_with_status 2
+
+            }
 
             run_show_topic "warranty"
+
             ;;
         --show-conditions)
 
-            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "show cannot be combined with other options"; exit 2; }
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${TXT_RED}show cannot be combined with other options${TXT_N_C}"
 
-            [ "$#" -eq 1 ] || { log 1 "--show-conditions must be used alone"; exit 2; }
+                exit_with_status 2
+
+            }
+
+            [ "$#" -eq 1 ] || { log 1 "${TXT_LIGHT_GREY}--show-conditions ${TXT_RED}must be used alone${TXT_N_C}"
+
+                exit_with_status 2
+
+            }
 
             run_show_topic "conditions"
+
             ;;
         -b|b|--binary|binary)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _BINARY="$2"
             shift 2
             ;;
         -B|B|--burst|burst)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _BURST="$2"
             shift 2
             ;;
         -c|c|--column|column)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _COLUMN="$2"
             shift 2
             ;;
         -C|C|--custom|custom)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _CUSTOM="$2"
-            seen_C=1
+            SEEN_C=1
             shift 2
             ;;
         -d|d|--directory|directory)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _DIRECTORY="$2"
 
-            [ "$seen_C" -eq 1 ] || _CUSTOM="$_DIRECTORY/custom.txt"
+            [ "$SEEN_C" -eq 1 ] || _CUSTOM="$_DIRECTORY/custom.txt"
 
             shift 2
             ;;
         -D|D|--duration|duration)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _DURATION="$2"
             shift 2
             ;;
         -f|f|--file|file)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _FILE="$2"
             shift 2
             ;;
         -F|F|--format|format)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _FORMAT="$2"
             shift 2
             ;;
         -i|i|--install|install)
 
-            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "install cannot be combined with other options"; exit 2; }
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${TXT_RED}install cannot be combined with other options${TXT_N_C}"
+
+                exit_with_status 2
+
+            }
 
             set_mode "install"
 
-            if [ "$#" -eq 1 ]; then
-                do_install "$_INSTALL"
-            elif [ "$#" -eq 2 ] && [ "${2#-}" = "$2" ]; then
+            if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
                 _INSTALL="$2"
-                do_install "$_INSTALL"
+                shift 2
             else
-                log 1 "install must be used alone (optional path allowed)"
-                exit 2
+                shift
             fi
-
-            exit 0
             ;;
         -l|l|--local|local)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
 
-            [ "$seen_r" -eq 0 ] || { log 1 "use only one of -l|-r"; exit 2; }
+            [ "$SEEN_R" -eq 0 ] || { log 1 "${TXT_RED}use only one of ${TXT_LIGHT_GREY}-l${TXT_RED}|${TXT_LIGHT_GREY}-r${TXT_N_C}"
 
-            seen_l=1
+                exit_with_status 2
+
+            }
+
+            SEEN_L=1
             _LOCATION="local"
-            parse_dns_opt "$2" || { log 1 "invalid -l value: $2"; exit 2; }
+
+            parse_dns_opt "$2" || { log 1 "${TXT_RED}invalid ${TXT_LIGHT_GREY}-l ${TXT_RED}value: ${TXT_LIGHT_GREY}$2${TXT_N_C}"
+
+                exit_with_status 2
+
+            }
+
             _LOCAL="$PARSED_DNS_HOST"
 
             [ -n "$PARSED_DNS_PORT" ] && _PORT="$PARSED_DNS_PORT"
@@ -2362,15 +3462,20 @@ while [ "$#" -gt 0 ]; do
             ;;
         -L|L|--location|location)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _LOCATION="$2"
 
             case "$_LOCATION" in
                 local|remote)
                     ;;
                 *)
-                    log 1 "_LOCATION must be one (1) of local|remote, got: $_LOCATION"
-                    exit 2
+
+                    log 1 "${TXT_RED}_LOCATION must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}local${TXT_RED}|${TXT_LIGHT_GREY}remote${TXT_RED}, got: ${TXT_LIGHT_GREY}$_LOCATION${TXT_N_C}"
+
+                    exit_with_status 2
+
                     ;;
             esac
 
@@ -2378,37 +3483,70 @@ while [ "$#" -gt 0 ]; do
             ;;
         -m|m|--maximum|maximum)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
-            _MAXIMUM="$2"
+
+            case "$2" in
+                *'!' )
+                    _MAXIMUM="${2%!}"
+                    _FORCE_MAXIMUM=1
+                    ;;
+                * )
+                    _MAXIMUM="$2"
+                    _FORCE_MAXIMUM=0
+                    ;;
+            esac
+
             shift 2
+            ;;
+        --force-maximum)
+            _FORCE_MAXIMUM=1
+            shift
             ;;
         -o|o|--output|output)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _OUTPUT="$2"
             shift 2
             ;;
         -p|p|--port|port)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _PORT="$2"
             shift 2
             ;;
         -q|q|--qps|qps)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _QPS="$2"
             shift 2
             ;;
         -r|r|--remote|remote)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
 
-            [ "$seen_l" -eq 0 ] || { log 1 "use only one of -l|-r"; exit 2; }
+            [ "$SEEN_L" -eq 0 ] || { log 1 "${TXT_RED}use only one of ${TXT_LIGHT_GREY}-l${TXT_RED}|${TXT_LIGHT_GREY}-r${TXT_N_C}"
 
-            seen_r=1
+                exit_with_status 2
+
+            }
+
+            SEEN_R=1
             _LOCATION="remote"
-            parse_dns_opt "$2" || { log 1 "invalid -r value: $2"; exit 2; }
+
+            parse_dns_opt "$2" || { log 1 "${TXT_RED}invalid ${TXT_LIGHT_GREY}-r ${TXT_RED}value: ${TXT_LIGHT_GREY}$2${TXT_N_C}"
+
+                exit_with_status 2
+
+            }
+
             _REMOTE="$PARSED_DNS_HOST"
 
             [ -n "$PARSED_DNS_PORT" ] && _PORT="$PARSED_DNS_PORT"
@@ -2417,49 +3555,95 @@ while [ "$#" -gt 0 ]; do
             ;;
         -s|s|--seconds|seconds)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _SECONDS="$2"
             shift 2
             ;;
         -t|t|--top|top)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
-            _TOP="$2"
+
+            _t_a="$2"
             shift 2
+
+            _t_extras=""
+
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    -*)
+                        break
+                        ;;
+                    /*|'||'*|^*|.*|*[!0-9]*)
+                        _t_extras="${_t_extras:+$_t_extras }$1"
+                        shift
+                        ;;
+                    [1-9]*)
+                        case "$_t_a" in
+                            .*|^*|'||'*|/*)
+                                _t_extras="${_t_extras:+$_t_extras }$1"
+                                shift
+                                ;;
+                            *)
+                                break
+                                ;;
+                        esac
+                        ;;
+                    *)
+                        break
+                        ;;
+                esac
+            done
+
+            _top_parsed="$(
+                set -f
+
+                # shellcheck disable=SC2086
+                parse_top_opt "$_t_a" $_t_extras
+
+            )" || exit_with_status 2
+
+            _TOP="$(printf '%s\n' "$_top_parsed" | sed -n '1p')"
+            _TOP_FILTERS="$(printf '%s\n' "$_top_parsed" | sed -n '2p')"
             ;;
         -T|T|--type|type)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _TYPE="$2"
             shift 2
             ;;
         -u|u|--uninstall|uninstall)
 
-            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "uninstall cannot be combined with other options"; exit 2; }
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${TXT_RED}uninstall cannot be combined with other options${TXT_N_C}"
+
+                exit_with_status 2
+
+            }
 
             set_mode "uninstall"
 
-            if [ "$#" -eq 1 ]; then
-                do_uninstall "$_UNINSTALL"
-            elif [ "$#" -eq 2 ] && [ "${2#-}" = "$2" ]; then
+            if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
                 _UNINSTALL="$2"
-                do_uninstall "$_UNINSTALL"
+                shift 2
             else
-                log 1 "uninstall must be used alone (optional path allowed)"
-                exit 2
+                shift
             fi
-
-            exit 0
             ;;
         -U|U|--url|url)
             SEEN_NONEXCLUSIVE=1
+
             need_optarg "$1" "$@"
+
             _URL="$2"
             shift 2
             ;;
         -V|V|--verbosity|verbosity)
-            SEEN_NONEXCLUSIVE=1
             need_optarg "$1" "$@"
+
             _VERBOSITY="$2"
             shift 2
             ;;
@@ -2468,44 +3652,229 @@ while [ "$#" -gt 0 ]; do
             break
             ;;
         *)
-            log 1 "unexpected positional argument(s): $*"
-            exit 2
+
+            log 1 "${TXT_RED}unexpected positional argument(s): ${TXT_LIGHT_GREY}$*${TXT_N_C}"
+
+            exit_with_status 2
+
             ;;
     esac
 
 done
 
-[ "$#" -eq 0 ] || { log 1 "unexpected positional argument(s): $*"; exit 2; }
+[ "$#" -eq 0 ] || { log 1 "${TXT_RED}unexpected positional argument(s): ${TXT_LIGHT_GREY}$*${TXT_N_C}"
 
-is_port "$_PORT" || { log 1 "_PORT must be one (1) of 1|...|65535, got: $_PORT"; exit 2; }
-is_posint "$_TOP" || { log 1 "invalid _TOP=$_TOP"; exit 2; }
-is_posint "$_BURST" || { log 1 "invalid _BURST=$_BURST"; exit 2; }
-is_posint "$_MAXIMUM" || { log 1 "invalid _MAXIMUM=$_MAXIMUM"; exit 2; }
-is_posint "$_QPS" || { log 1 "invalid _QPS=$_QPS"; exit 2; }
-is_nonnegint "$_COLUMN" || { log 1 "invalid _COLUMN=$_COLUMN"; exit 2; }
-is_nonnegint "$_COLUMN" || { log 1 "invalid _COLUMN=$_COLUMN"; exit 2; }
-_DURATION_RAW="$_DURATION"
-_DURATION="$(parse_duration "$_DURATION_RAW")" || {
-    log 1 "invalid _DURATION='$_DURATION_RAW' (use seconds or e.g. 1h, 2d 14h 27m 52s)"
-    exit 2
+    exit_with_status 2
+
 }
+
+if [ "$_MODE" = "install" ]; then
+
+    do_install "$_INSTALL"
+
+    exit 0
+fi
+
+if [ "$_MODE" = "uninstall" ]; then
+
+    do_uninstall "$_UNINSTALL"
+
+    exit 0
+fi
+
+TMPROOT="${TMPDIR:-/tmp}"
+TMPDIR="$(make_tmpdir "$TMPROOT")" || { log 0 "${TXT_BOLD}${TXT_RED}failed to create temp dir in ${TXT_LIGHT_GREY}$TMPROOT${TXT_N_C}"
+    exit 1
+}
+
+log 4 "${TXT_GREY}created temp dir: ${TXT_LIGHT_GREY}$TMPDIR${TXT_N_C}"
+
+ANSWERS_FILE="$TMPDIR/answers.txt"
+
+is_port "$_PORT" || { log 1 "${TXT_RED}_PORT must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}1${TXT_RED}|${TXT_LIGHT_GREY}...${TXT_RED}|${TXT_LIGHT_GREY}65535${TXT_RED}, got: ${TXT_LIGHT_GREY}$_PORT${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+is_posint "$_TOP" || { log 1 "${TXT_RED}invalid _TOP=${TXT_LIGHT_GREY}$_TOP${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+[ -n "$_TOP_FILTERS" ] && log 4 "${TXT_GREY}top filters active: ${TXT_LIGHT_GREY}$_TOP_FILTERS${TXT_N_C}"
+
+is_posint "$_BURST" || { log 1 "${TXT_RED}invalid _BURST=${TXT_LIGHT_GREY}$_BURST${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+is_posint "$_MAXIMUM" || { log 1 "${TXT_RED}invalid _MAXIMUM=${TXT_LIGHT_GREY}$_MAXIMUM${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+is_posint "$_QPS" || { log 1 "${TXT_RED}invalid _QPS=${TXT_LIGHT_GREY}$_QPS${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+is_nonnegint "$_COLUMN" || { log 1 "${TXT_RED}invalid _COLUMN=${TXT_LIGHT_GREY}$_COLUMN${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+_DURATION_RAW="$_DURATION"
+
+_DURATION="$(parse_duration "$_DURATION_RAW")" || {
+
+    log 1 "${TXT_RED}invalid _DURATION=$_DURATION_RAW ${TXT_RED}(use seconds or e.g. ${TXT_LIGHT_GREY}1h${TXT_RED}, ${TXT_LIGHT_GREY}2d 14h 27m 52s${TXT_RED})${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
 _SECONDS_RAW="$_SECONDS"
+
 _SECONDS="$(parse_duration "$_SECONDS_RAW")" || {
-    log 1 "invalid _SECONDS='$_SECONDS_RAW' (use seconds or e.g. 1h, 2d 14h 27m 52s)"
-    exit 2
+
+    log 1 "${TXT_RED}invalid _SECONDS=$_SECONDS_RAW ${TXT_RED}(use seconds or e.g. ${TXT_LIGHT_GREY}1h${TXT_RED}, ${TXT_LIGHT_GREY}2d 14h 27m 52s${TXT_RED})${TXT_N_C}"
+
+    exit_with_status 2
+
+}
+
+timer_period_seconds() {
+
+    if [ -n "${_TIMER_PERIOD:-}" ]; then
+        p="$(parse_duration "$_TIMER_PERIOD" 2>/dev/null || true)"
+
+        case "$p" in
+            ''|*[!0-9]*|0)
+                return 1
+                ;;
+        esac
+
+        printf '%s\n' "$p"
+        return 0
+    fi
+
+    if need_cmd systemctl; then
+        raw="$(systemctl show "${UNIT_BASE}.timer" -p OnUnitActiveUSec --value 2>/dev/null || true)"
+        raw="$(printf '%s\n' "$raw" | awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }')"
+
+        case "$raw" in
+            ''|0)
+                ;;
+            *[!0-9]*)
+                sec="$(parse_duration "$raw" 2>/dev/null || true)"
+
+                case "$sec" in
+                    ''|*[!0-9]*|0)
+                        ;;
+                    *)
+                        printf '%s\n' "$sec"
+                        return 0
+                        ;;
+                esac
+
+                ;;
+            *)
+                sec=$(( (raw + 999999) / 1000000 ))
+
+                [ "$sec" -gt 0 ] || return 1
+
+                printf '%s\n' "$sec"
+                return 0
+                ;;
+        esac
+
+    fi
+
+    timer_file="$SERVICE_DIR/${UNIT_BASE}.timer"
+
+    if [ -r "$timer_file" ]; then
+        raw="$(awk -F= '
+            /^[[:space:]]*OnUnitActiveSec[[:space:]]*=/ {
+                v=$2
+                sub(/^[[:space:]]+/, "", v)
+                sub(/[[:space:]]+$/, "", v)
+                print v
+                exit
+            }
+        ' "$timer_file")"
+
+        [ -n "$raw" ] || return 1
+
+        sec="$(parse_duration "$raw" 2>/dev/null || true)"
+
+        case "$sec" in
+            ''|*[!0-9]*|0)
+                return 1
+                ;;
+        esac
+
+        printf '%s\n' "$sec"
+        return 0
+    fi
+
+    return 1
+}
+
+enforce_timer_duration_guard() {
+
+    is_running_under_own_service || return 0
+
+    period="$(timer_period_seconds 2>/dev/null || true)"
+
+    if [ -z "$period" ]; then
+
+        log 2 "${TXT_YELLOW}service context detected, but timer period could not be determined${TXT_N_C}"
+
+        log 3 "${TXT_BLUE}skipping _DURATION guard${TXT_N_C}"
+
+        return 0
+    fi
+
+    if [ "$_DURATION" -eq 0 ]; then
+
+        log 2 "${TXT_YELLOW}_DURATION too low for timer (${TXT_LIGHT_GREY}$_DURATION${TXT_YELLOW}), setting to timer period (${TXT_LIGHT_GREY}$period${TXT_YELLOW})${TXT_N_C}"
+
+        _DURATION="$period"
+        return 0
+    fi
+
+    if [ "$_DURATION" -gt "$period" ]; then
+
+        log 2 "${TXT_YELLOW}_DURATION too high for timer (${TXT_LIGHT_GREY}$_DURATION${TXT_YELLOW}, setting to timer period (${TXT_LIGHT_GREY}$period${TXT_YELLOW})${TXT_N_C}"
+
+        _DURATION="$period"
+        return 0
+    fi
 }
 
 enforce_timer_duration_guard
 
-if [ "$_MAXIMUM" -gt 128 ]; then
-    log 2 "_MAXIMUM too high ($_MAXIMUM), clamping to 128"
+if [ "$_MAXIMUM" -gt 128 ] && [ "${_FORCE_MAXIMUM:-0}" -ne 1 ]; then
+
+    log 2 "${TXT_YELLOW}_MAXIMUM too high (${TXT_LIGHT_GREY}$_MAXIMUM${TXT_YELLOW}), clamping to ${TXT_LIGHT_GREY}128${TXT_YELLOW}${TXT_N_C}"
+
+    log 3 "${TXT_BLUE}to override, use -m <value>! (e.g. -m 256!)${TXT_N_C}"
+
     _MAXIMUM=128
 fi
 
 max_burst=$((_QPS * 2))
 
 if [ "$_BURST" -gt "$max_burst" ]; then
-    log 2 "_BURST too high for _QPS ($_BURST > $max_burst), clamping"
+
+    log 2 "${TXT_YELLOW}_BURST too high for _QPS (${TXT_LIGHT_GREY}$_BURST ${TXT_YELLOW}> ${TXT_LIGHT_GREY}$max_burst${TXT_YELLOW}), clamping${TXT_N_C}"
+
     _BURST="$max_burst"
 fi
 
@@ -2513,8 +3882,11 @@ case "$_FORMAT" in
     auto|plain|csv)
         ;;
     *)
-        log 1 "_FORMAT must be one (1) of auto|plain|csv, got: $_FORMAT"
-        exit 2
+
+        log 1 "${TXT_RED}_FORMAT must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}auto${TXT_RED}|${TXT_LIGHT_GREY}plain${TXT_RED}|${TXT_LIGHT_GREY}csv, got: ${TXT_LIGHT_GREY}$_FORMAT${TXT_N_C}"
+
+        exit_with_status 2
+
         ;;
 esac
 
@@ -2522,8 +3894,11 @@ case "$_OUTPUT" in
     quiet|answer)
         ;;
     *)
-        log 1 "_OUTPUT must be one (1) of quiet|answer, got: $_OUTPUT"
-        exit 2
+
+        log 1 "${TXT_RED}_OUTPUT must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}quiet${TXT_RED}|${TXT_LIGHT_GREY}answer${TXT_RED}, got: ${TXT_LIGHT_GREY}$_OUTPUT${TXT_N_C}"
+
+        exit_with_status 2
+
         ;;
 esac
 
@@ -2532,8 +3907,11 @@ _TYPE_ID=""
 
 case "$_TYPE" in
     ANY)
-        log 1 "_TYPE=ANY is not allowed"
-        exit 2
+
+        log 1 "${TXT_RED}_TYPE=${TXT_LIGHT_GREY}ANY ${TXT_RED}is not allowed (RR type ${TXT_LIGHT_GREY}255${TXT_RED})${TXT_N_C}"
+
+        exit_with_status 2
+
         ;;
     TYPE[0-9]*)
         _TYPE_ID="${_TYPE#TYPE}"
@@ -2547,26 +3925,40 @@ if [ -n "$_TYPE_ID" ]; then
 
     case "$_TYPE_ID" in
         ''|*[!0-9]*)
-            log 1 "invalid _TYPE=$_TYPE"
-            exit 2
+
+            log 1 "${TXT_RED}invalid _TYPE=${TXT_LIGHT_GREY}$_TYPE${TXT_RED}${TXT_N_C}"
+
+            exit_with_status 2
+
             ;;
     esac
 
     [ "$_TYPE_ID" -ge 1 ] && [ "$_TYPE_ID" -le 65535 ] || {
-        log 1 "_TYPE RR ID must be one (1) of 1|...|65535, got: $_TYPE_ID"
-        exit 2
+
+        log 1 "${TXT_RED}_TYPE RR ID must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of ${TXT_LIGHT_GREY}1${TXT_RED}|${TXT_LIGHT_GREY}...${TXT_RED}|${TXT_LIGHT_GREY}65535${TXT_RED}, got: ${TXT_LIGHT_GREY}$_TYPE_ID${TXT_N_C}"
+
+        exit_with_status 2
+
     }
 
     [ "$_TYPE_ID" -ne 255 ] || {
-        log 1 "_TYPE RR ID 255 (ANY) is not allowed"
-        exit 2
+
+        log 1 "${TXT_RED}_TYPE RR ID ${TXT_LIGHT_GREY}255 ${TXT_RED}(${TXT_LIGHT_GREY}ANY${TXT_RED}) is not allowed${TXT_N_C}"
+
+        exit_with_status 2
+
     }
 
     _TYPE_MN="$(rr_type_from_id "$_TYPE_ID" 2>/dev/null || true)"
 
     [ -n "$_TYPE_MN" ] || {
-        log 1 "unsupported RR type ID: $_TYPE_ID (use a mnemonic like A/AAAA/MX/TXT or a known ID)"
-        exit 2
+
+        log 1 "${TXT_RED}unsupported RR type ID: ${TXT_LIGHT_GREY}$_TYPE_ID${TXT_RED}${TXT_N_C}"
+
+        log 3 "${TXT_BLUE}tip, use a mnemonic (like ${TXT_LIGHT_GREY}A${TXT_BLUE}/${TXT_LIGHT_GREY}AAAA${TXT_BLUE}/${TXT_LIGHT_GREY}MX${TXT_BLUE}/${TXT_LIGHT_GREY}TXT${TXT_BLUE}) for uncommon RR types${TXT_N_C}"
+
+        exit_with_status 2
+
     }
 
     _TYPE="$_TYPE_MN"
@@ -2576,45 +3968,70 @@ choose_tool
 
 if [ -z "$_REMOTE" ]; then
     _REMOTE="$_LOCAL"
-    log 4 "_REMOTE unset; falling back to _LOCAL=$_LOCAL"
+
+    log 4 "${TXT_GREY}_REMOTE unset; falling back to _LOCAL=${TXT_LIGHT_GREY}$_LOCAL${TXT_N_C}"
+
 fi
 
 RESOLVER=""
 
 case "$_LOCATION" in
     local)
-        is_valid_local_dns "$_LOCAL" || { log 1 "_LOCAL must be one (1) of valid local IPv4|IPv6 address, got: $_LOCAL"; exit 2; }
+
+        is_valid_local_dns "$_LOCAL" || { log 1 "${TXT_RED}_LOCAL must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of valid local resolver${TXT_N_C}, got: ${TXT_LIGHT_GREY}$_LOCAL${TXT_N_C}"
+
+            exit_with_status 2
+
+        }
+
         RESOLVER="$_LOCAL"
         ;;
     remote)
-        is_valid_dns "$_REMOTE" || { log 1 "_REMOTE must be one (1) of valid IPv4|IPv6 address, got: $_REMOTE"; exit 2; }
+
+        is_valid_dns "$_REMOTE" || { log 1 "${TXT_RED}_REMOTE must be one (${TXT_LIGHT_GREY}1${TXT_RED}) of valid resolver${TXT_N_C}, got: ${TXT_LIGHT_GREY}$_REMOTE${TXT_N_C}"
+
+            exit_with_status 2
+
+        }
+
         RESOLVER="$_REMOTE"
         ;;
 esac
 
 if [ -n "$_FILE" ] && [ ! -r "$_FILE" ]; then
-    log 1 "input file not readable: $_FILE"
-    exit 2
+
+    log 1 "${TXT_RED}input file not readable: ${TXT_LIGHT_GREY}$_FILE${TXT_N_C}"
+
+    exit_with_status 2
+
 fi
 
-log 4 "effective config: BINARY=$_BINARY OUTPUT=$_OUTPUT LOCATION=$_LOCATION RESOLVER=$RESOLVER PORT=$_PORT TYPE=$_TYPE QPS=$_QPS BURST=$_BURST MAXIMUM=$_MAXIMUM TOP=$_TOP DURATION=$_DURATION FORMAT=$_FORMAT COLUMN=$_COLUMN DIRECTORY=$_DIRECTORY"
+log 4 "${TXT_GREY}effective config: BINARY=${TXT_LIGHT_GREY}$_BINARY ${TXT_GREY}OUTPUT=${TXT_LIGHT_GREY}$_OUTPUT ${TXT_GREY}LOCATION=${TXT_LIGHT_GREY}$_LOCATION ${TXT_GREY}RESOLVER=${TXT_LIGHT_GREY}$RESOLVER ${TXT_GREY}PORT=${TXT_LIGHT_GREY}$_PORT ${TXT_GREY}TYPE=${TXT_LIGHT_GREY}$_TYPE ${TXT_GREY}QPS=${TXT_LIGHT_GREY}$_QPS ${TXT_GREY}BURST=${TXT_LIGHT_GREY}$_BURST ${TXT_GREY}MAXIMUM=${TXT_LIGHT_GREY}$_MAXIMUM ${TXT_GREY}TOP=${TXT_LIGHT_GREY}$_TOP ${TXT_GREY}TOP_FILTERS=${TXT_LIGHT_GREY}${_TOP_FILTERS:-${TXT_GREY}(${TXT_LIGHT_GREY}none${TXT_GREY})} DURATION=${TXT_LIGHT_GREY}$_DURATION ${TXT_GREY}FORMAT=${TXT_LIGHT_GREY}$_FORMAT ${TXT_GREY}COLUMN=${TXT_LIGHT_GREY}$_COLUMN ${TXT_GREY}DIRECTORY=${TXT_LIGHT_GREY}$_DIRECTORY ${TXT_GREY}CUSTOM=${TXT_LIGHT_GREY}$_CUSTOM${TXT_N_C}"
 
 print_start_notice
-
-TMPROOT="${TMPDIR:-/tmp}"
-TMPDIR="$(make_tmpdir "$TMPROOT")" || { log 1 "failed to create temp dir in $TMPROOT"; exit 1; }
-
-log 4 "created temp dir: $TMPDIR"
 
 CLEANED=0
 
 SENT=0
+DOMAINS_EOF=0
 
 stop_worker_pool() {
     mode="${1:-graceful}"
-    log 4 "stop_worker_pool: mode=$mode workers='${WORKER_PIDS# }'"
+
+    if [ -z "$WORKER_PIDS" ]; then
+
+        w="none"
+
+    else
+        w="$WORKER_PIDS"
+    fi
+
+    log 4 "${TXT_GREY}stop_worker_pool: mode=${TXT_LIGHT_GREY}$mode ${TXT_GREY}workers:${TXT_LIGHT_GREY}$w${TXT_N_C}"
 
     if [ "$WRITER_FD_OPEN" -eq 1 ]; then
+
+        log 4 "${TXT_GREY}stop_worker_pool: closing writer for ${TXT_LIGHT_GREY}$QUEUE_FIFO${TXT_N_C}"
+
         exec 4>&-
         WRITER_FD_OPEN=0
     fi
@@ -2622,64 +4039,253 @@ stop_worker_pool() {
     if [ "$mode" = "force" ]; then
 
         for p in $WORKER_PIDS; do
+
+            log 4 "${TXT_GREY}stop_worker_pool: sending TERM to pid=${TXT_LIGHT_GREY}$p${TXT_N_C}"
+
             kill -TERM "$p" 2>/dev/null || true
         done
 
         for p in $WORKER_PIDS; do
+
+            log 4 "${TXT_GREY}stop_worker_pool: sending KILL to pid=${TXT_LIGHT_GREY}$p${TXT_N_C}"
+
             kill -KILL "$p" 2>/dev/null || true
         done
 
     fi
 
     for p in $WORKER_PIDS; do
+
+        log 4 "${TXT_GREY}stop_worker_pool: waiting for pid=${TXT_LIGHT_GREY}$p${TXT_N_C}"
+
         wait "$p" 2>/dev/null || true
     done
 
     WORKER_PIDS=""
 
     if [ -n "$QUEUE_FIFO" ]; then
+        if [ -e "$QUEUE_FIFO" ]; then
+
+            log 4 "${TXT_GREY}stop_worker_pool: removing queue fifo ${TXT_LIGHT_GREY}$QUEUE_FIFO${TXT_N_C}"
+
+        else
+
+            log 4 "${TXT_GREY}stop_worker_pool: queue fifo already absent ${TXT_LIGHT_GREY}$QUEUE_FIFO${TXT_N_C}"
+
+        fi
+
         rm -f "$QUEUE_FIFO" 2>/dev/null || true
+
+        QUEUE_FIFO=""
     fi
 }
 
 cleanup_all() {
+    print_success() {
+        if [ -t 2 ] && [ "$_VERBOSITY" -ge 1 ]; then
+            printf '%b\n' "${TXT_LIGHT_GREY}[${TXT_GREEN}✓${TXT_LIGHT_GREY}] ${TXT_BOLD}${TXT_GREEN}done!${TXT_N_C}"
+        fi
+    }
+
     mode="${1:-graceful}"
 
     if [ "$CLEANED" -eq 0 ]; then
         CLEANED=1
+
+        log 4 "${TXT_GREY}cleanup_all: begin mode=${TXT_LIGHT_GREY}$mode${TXT_N_C}"
+
+        if [ -n "${FETCH_CACHE_TMP:-}" ]; then
+
+            log 4 "${TXT_GREY}cleanup_all: removing pending fetch temp ${TXT_LIGHT_GREY}$FETCH_CACHE_TMP${TXT_N_C}"
+
+            rm -f "$FETCH_CACHE_TMP" 2>/dev/null || true
+
+            FETCH_CACHE_TMP=""
+        fi
+
         stop_worker_pool "$mode"
-        rm -rf "$TMPDIR"
+
+        exec 3<&- || true
+
+        if [ -n "${TMPDIR:-}" ]; then
+
+            if [ -d "$TMPDIR" ]; then
+
+                log 4 "${TXT_GREY}cleanup_all: removing temp dir ${TXT_LIGHT_GREY}$TMPDIR${TXT_N_C}"
+
+                rm -fr "$TMPDIR" 2>/dev/null || {
+
+                    log 2 "${TXT_YELLOW}cleanup_all: temp dir not empty, retrying${TXT_N_C}"
+
+                    sleep 0.1
+
+                    rm -fr "$TMPDIR" 2>/dev/null || log 1 "${TXT_RED}cleanup_all: failed to remove temp dir ${TXT_LIGHT_GREY}$TMPDIR${TXT_RED}${TXT_N_C}"
+
+                }
+
+            else
+
+                log 4 "${TXT_GREY}cleanup_all: temp dir already absent ${TXT_LIGHT_GREY}$TMPDIR${TXT_N_C}"
+
+            fi
+
+        fi
+
+        log 4 "${TXT_GREY}cleanup_all: complete mode=${TXT_LIGHT_GREY}$mode${TXT_N_C}"
+
+        print_success
+
+        return 0
     fi
 
-    log 4 "cleanup_all: mode=$mode"
+    log 4 "${TXT_GREY}cleanup_all: already cleaned; skipping (mode=${TXT_LIGHT_GREY}$mode${TXT_GREY})${TXT_N_C}"
+
+    print_success
+
+    return 0
+}
+
+runtime_report() {
+    v="${1:-$_VERBOSITY}"
+
+    compute_runtime_metrics
+
+    ACTIVE_HUMAN="$(format_runtime_ms "$active_ms")"
+    QUERIES_WINDOW_HUMAN="$(format_runtime_ms "$queries_window_ms")"
+    SCRIPT_WINDOW_HUMAN="$(format_runtime_ms "$script_window_ms")"
+
+    blocked_line() {
+
+        if [ "$BLOCKED" -gt 0 ]; then
+            printf '%b[%b•%b] %bBlocked (%b0.0.0.0%b): %b%s %b(%b%s%%%b)\n' \
+                "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" \
+                "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" \
+                "$BLOCKED" "$TXT_GREY" "$TXT_LIGHT_GREY" "$BLOCK_PCT" \
+                "$TXT_GREY"
+        fi
+
+    }
+
+    nxdomain_line() {
+
+        if [ "$NXDOMAIN" -gt 0 ]; then
+            printf ' %b[%b•%b] %bNXDOMAIN:         %b%s %b(%b%s%%%b)\n' \
+                "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" \
+                "$TXT_GREY" "$TXT_LIGHT_GREY" "$NXDOMAIN" "$TXT_GREY" \
+                "$TXT_LIGHT_GREY" "$NXDOMAIN_PCT" "$TXT_GREY"
+        fi
+
+    }
+
+    if [ "$v" -ge 4 ]; then
+        printf '%b[%b•%b] %bScript start:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" \
+            "$(date -d "@$((SCRIPT_START/1000))" "+%F %T" 2>/dev/null || date -r $((SCRIPT_START/1000)) 2>/dev/null)" \
+            "$TXT_N_C"
+        printf '%b[%b•%b] %bQueries start:%b     %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" \
+            "$(date -d "@$((queries_start/1000))" "+%F %T" 2>/dev/null || date -r $((queries_start/1000)) 2>/dev/null)" \
+            "$TXT_N_C"
+        printf '%b[%b•%b] %bLast query sent:%b   %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" \
+            "$(date -d "@$((last_sent_ms/1000))" "+%F %T" 2>/dev/null || date -r $((last_sent_ms/1000)) 2>/dev/null)" \
+            "$TXT_N_C"
+        printf '%b[%b•%b] %bScript end:%b        %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" \
+            "$(date -d "@$((end_ms/1000))" "+%F %T" 2>/dev/null || date -r $((end_ms/1000)) 2>/dev/null)" \
+            "$TXT_N_C"
+        printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$SCRIPT_WINDOW_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bQuery window:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$QUERIES_WINDOW_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bActive query time:%b %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$ACTIVE_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$sent" "$TXT_N_C"
+
+        blocked_line
+
+        nxdomain_line
+
+        printf '%b[%b•%b] %bQPS (active):%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$ach_qps" "$TXT_N_C"
+        printf '%b[%b•%b] %bQPS (total):%b       %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$total_qps" "$TXT_N_C"
+    elif [ "$v" -ge 3 ]; then
+        printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$SCRIPT_WINDOW_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bQuery window:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$QUERIES_WINDOW_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bActive query time:%b %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$ACTIVE_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$sent" "$TXT_N_C"
+
+        blocked_line
+
+        nxdomain_line
+
+        printf '%b[%b•%b] %bQPS:%b               %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$ach_qps" "$TXT_N_C"
+    elif [ "$v" -ge 2 ]; then
+        printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$SCRIPT_WINDOW_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$sent" "$TXT_N_C"
+
+        blocked_line
+
+        nxdomain_line
+
+        printf '%b[%b•%b] %bQPS:%b               %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$ach_qps" "$TXT_N_C"
+    elif [ "$v" -ge 1 ]; then
+        printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$SCRIPT_WINDOW_HUMAN" "$TXT_N_C"
+        printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
+            "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_LIGHT_GREY" "$TXT_GREY" "$TXT_N_C" \
+            "$TXT_LIGHT_GREY" "$sent" "$TXT_N_C"
+    fi
+
 }
 
 on_abort() {
     trap - INT TERM HUP
-    log 4 "on_abort: signal caught, forcing cleanup"
+    trap - EXIT
+
+    log 4 "${TXT_GREY}on_abort: signal caught, forcing cleanup${TXT_N_C}"
+
     cleanup_all force
 
-    now_abort="$(now_ms)"
-    run_ms=$((now_abort - SCRIPT_START))
+    END_MS="$(now_ms)"
 
-    start_ms="${START_TS:-$now_abort}"
-    elapsed_ms=$((now_abort - start_ms))
-    sent="${SENT:-0}"
+    if [ -t 2 ] && [ "$_VERBOSITY" -gt 0 ]; then
 
-    if [ "$elapsed_ms" -gt 0 ]; then
-        ach_qps="$(awk -v s="$sent" -v ms="$elapsed_ms" 'BEGIN { printf "%.2f", s / (ms / 1000) }')"
-    else
-        ach_qps="0"
+        runtime_report
+
     fi
 
-    elapsed_human="$(format_runtime_ms "$elapsed_ms")"
-    run_human="$(format_runtime_ms "$run_ms")"
+    exit_with_status 130
 
-    if [ -t 1 ] && [ "$_VERBOSITY" -gt 0 ]; then
-        printf '\n%s\n' "${sent}q / ${elapsed_human} = ${ach_qps}qps, took ${run_human}." >&2
-    fi
-
-    exit 130
 }
 
 trap 'cleanup_all' EXIT
@@ -2692,39 +4298,167 @@ SRC_NAME="${_FILE:-$_URL}"
 
 fetch_source "$RAW"
 
+READ_SOURCE="${FETCH_SOURCE_PATH:-$RAW}"
+
 case "$SRC_NAME" in
     *.zip)
-        need_cmd unzip || { log 1 "unzip required for zip source"; exit 1; }
-        unzip -p "$RAW" 2>/dev/null | extract_domains > "$MAIN_DOMAINS"
-        log 3 "extracted domains from zip source: $SRC_NAME"
+
+        need_cmd unzip || { log 1 "${TXT_RED}unzip required for zip sources${TXT_N_C}"
+            exit 1
+        }
+
+        ZIP_EXTRACT="$TMPDIR/unzipped.txt"
+
+        validate_zip_file "$READ_SOURCE" || { log 1 "${TXT_RED}zip integrity check failed: ${TXT_LIGHT_GREY}$SRC_NAME${TXT_N_C}"
+            exit 1
+        }
+
+        extract_zip_to_file "$READ_SOURCE" "$ZIP_EXTRACT" || { log 1 "${TXT_RED}failed to extract zip source: ${TXT_LIGHT_GREY}$SRC_NAME${TXT_N_C}"
+            exit 1
+        }
+
+        extract_domains < "$ZIP_EXTRACT" > "$MAIN_DOMAINS"
+
+        log 3 "${TXT_BLUE}extracted domains from zip source${TXT_N_C}"
+
         ;;
     *)
-        extract_domains < "$RAW" > "$MAIN_DOMAINS"
-        log 3 "extracted domains from source: $SRC_NAME"
+
+        extract_domains < "$READ_SOURCE" > "$MAIN_DOMAINS"
+
+        log 3 "${TXT_BLUE}extracted domains from source${TXT_N_C}"
+
         ;;
 esac
 
 {
 
     if [ -r "$_CUSTOM" ]; then
-        log 3 "using custom source: $_CUSTOM"
+
+        log 3 "${TXT_BLUE}using custom source: ${TXT_LIGHT_GREY}$_CUSTOM${TXT_N_C}"
+
         extract_custom_domains < "$_CUSTOM"
-    elif [ "$seen_C" -eq 1 ]; then
-        log 2 "custom source not readable, skipping: $_CUSTOM"
+
+    elif [ "$SEEN_C" -eq 1 ]; then
+
+        log 2 "${TXT_YELLOW}custom source not readable, skipping: ${TXT_LIGHT_GREY}$_CUSTOM${TXT_N_C}"
+
     fi
 
-    cat "$MAIN_DOMAINS"
-} | awk '!seen[$0]++' | head -n "$_TOP" > "$DOMAINS"
+cat "$MAIN_DOMAINS"
+} | awk \
+    -v filters="$_TOP_FILTERS" \
+    -v top="$_TOP" \
+    -v v="$_VERBOSITY" \
+    -v TXT_GREY="$TXT_GREY" \
+    -v TXT_N_C="$TXT_N_C" \
+    -v TXT_LIGHT_GREY="$TXT_LIGHT_GREY" '
+    function emit_domain(d) {
+        out_count++
+
+        if (dbg) {
+            printf " %s[%s•%s] %stop domain: %s%s %s(%s%d%s)%s\n", TXT_LIGHT_GREY, TXT_GREY, TXT_LIGHT_GREY, \
+                TXT_GREY, TXT_LIGHT_GREY, d, TXT_GREY, TXT_LIGHT_GREY, out_count, TXT_GREY, \
+                TXT_N_C > "/dev/stderr"
+        }
+
+        print d
+
+        if (out_count >= top) exit
+    }
+
+    BEGIN {
+        nf = 0
+        out_count = 0
+        dbg = ((v + 0) >= 4)
+
+        if (filters != "") {
+            n = split(filters, raw, " ")
+
+            for (i = 1; i <= n; i++) {
+                pat = raw[i]
+
+                if (pat == "") continue
+
+                nf++
+                ftype[nf] = ""
+                fpat[nf]  = pat
+
+                if (pat ~ /^\/.*\/$/) {
+                    ftype[nf] = "regex"
+                    fpat[nf]  = substr(pat, 2, length(pat) - 2)
+                } else if (substr(pat, 1, 2) == "||") {
+                    ftype[nf] = "anchor"
+                    fpat[nf]  = substr(pat, 3)
+                    gsub(/\./, "\\.", fpat[nf])
+                    fpat[nf] = "(^|\\.)" fpat[nf] "$"
+                } else if (substr(pat, 1, 1) == "^") {
+                    ftype[nf] = "prefix"
+                    fpat[nf]  = substr(pat, 2)
+                } else if (substr(pat, 1, 1) == ".") {
+                    ftype[nf] = "suffix"
+                    fpat[nf]  = pat
+                } else {
+                    ftype[nf] = "substr"
+                }
+            }
+        }
+    }
+
+    {
+        d = $0
+
+        if (nf == 0) {
+            emit_domain(d)
+            next
+        }
+
+        dlen = length(d)
+        matched = 0
+
+        for (i = 1; i <= nf; i++) {
+            if (ftype[i] == "suffix") {
+                fl   = fpat[i]
+                flen = length(fl)
+
+                if (dlen >= flen && substr(d, dlen - flen + 1) == fl) {
+                    matched = 1
+                    break
+                }
+
+            } else if (ftype[i] == "prefix") {
+
+                if (index(d, fpat[i]) == 1) {
+                    matched = 1
+                    break
+                }
+
+            } else if (ftype[i] == "regex" || ftype[i] == "anchor") {
+
+                if (d ~ fpat[i]) {
+                    matched = 1
+                    break
+                }
+
+            } else {
+                if (index(d, fpat[i]) > 0) {
+                    matched = 1
+                    break
+                }
+            }
+        }
+
+        if (matched) emit_domain(d)
+    }
+' > "$DOMAINS"
 
 _DOMAINS="$(wc -l < "$DOMAINS" | tr -d ' ')"
 
-[ "$_DOMAINS" -gt 0 ] || { log 1 "no domains found"; exit 1; }
+[ "$_DOMAINS" -gt 0 ] || { log 1 "${TXT_RED}no domains found in source after filtering${TXT_N_C}"
+    exit 1
+}
 
-if [ "$USING_CACHE" -eq 1 ]; then
-     USING_CACHE_STR=" (cache hit, age: $CACHE_AGE seconds)"
-fi
-
-log 3 "got $_DOMAINS domains from: $SRC_NAME${USING_CACHE_STR}."
+log 3 "${TXT_BLUE}got ${TXT_LIGHT_GREY}$_DOMAINS ${TXT_BLUE}domains from source${TXT_N_C}"
 
 MBUCKET=$((_BURST * 1000))
 MTOKENS="$MBUCKET"
@@ -2733,26 +4467,41 @@ START_TS="$LAST_TS"
 DEBUG_TICK_MS="$START_TS"
 
 open_domains() {
-    exec 3< "$DOMAINS"
+    DOMAINS_EOF=0
+
+    exec 3< "$DOMAINS" || {
+
+        log 0 "${TXT_BOLD}${TXT_RED}failed to open domain list: ${TXT_LIGHT_GREY}$DOMAINS${TXT_N_C}"
+
+        return 1
+    }
+
 }
 
 next_domain() {
 
     if IFS= read -r CUR <&3; then
+        DOMAINS_EOF=0
         return 0
     fi
 
     if [ "$_DURATION" -eq 0 ]; then
         exec 3<&-
         exec 3< "$DOMAINS"
-        IFS= read -r CUR <&3
-    else
-        return 1
+
+        if IFS= read -r CUR <&3; then
+            DOMAINS_EOF=0
+            return 0
+        fi
     fi
 
+    DOMAINS_EOF=1
+    return 1
 }
 
-open_domains
+open_domains || { log 0 "${TXT_BOLD}${TXT_RED}failed to open domain list: ${TXT_LIGHT_GREY}$DOMAINS${TXT_N_C}"
+    exit 1
+}
 
 SLEEP_TINY_OK=0
 
@@ -2760,46 +4509,42 @@ if sleep 0.01 2>/dev/null; then
     SLEEP_TINY_OK=1
 fi
 
-nap() {
-
-    if [ "$SLEEP_TINY_OK" -eq 1 ]; then
-        sleep 0.01
-    else
-        sleep 1
-    fi
-
-}
-
 nap_for_tokens() {
     deficit_ms="${1:-1}"
 
     if [ "$SLEEP_TINY_OK" -eq 1 ]; then
 
         if [ "$deficit_ms" -le 10 ]; then
+
             sleep 0.01
+
         elif [ "$deficit_ms" -le 20 ]; then
+
             sleep 0.02
+
         else
+
             sleep 0.05
+
         fi
 
     else
+
         sleep 1
+
     fi
 
 }
 
 start_worker_pool "$_MAXIMUM" || exit 1
-log 3 "worker pool size: $_MAXIMUM"
+
+log 3 "${TXT_BLUE}worker pool size: ${TXT_LIGHT_GREY}$_MAXIMUM${TXT_N_C}"
+
+QUERIES_START=0
 
 while :; do
     now_s="$(now_ms)"
     elapsed_total=$(( (now_s - START_TS) / 1000 ))
-
-    if [ $((now_s - DEBUG_TICK_MS)) -ge 1000 ]; then
-        log 4 "loop: elapsed_s=$elapsed_total sent=$SENT mtokens=$MTOKENS budget=$((MTOKENS / 1000))"
-        DEBUG_TICK_MS="$now_s"
-    fi
 
     if [ "$_DURATION" -gt 0 ] && [ "$elapsed_total" -ge "$_DURATION" ]; then
         break
@@ -2818,52 +4563,71 @@ while :; do
     tokq=$((MTOKENS / 1000))
     budget="$tokq"
 
+    if [ $((now_s - DEBUG_TICK_MS)) -ge 1000 ]; then
+
+        log 4 "${TXT_GREY}loop: elapsed_s=${TXT_LIGHT_GREY}$elapsed_total ${TXT_GREY}sent=${TXT_LIGHT_GREY}$SENT ${TXT_GREY}mtokens=${TXT_LIGHT_GREY}$MTOKENS ${TXT_GREY}budget=${TXT_LIGHT_GREY}$budget${TXT_N_C}"
+
+        DEBUG_TICK_MS="$now_s"
+    fi
+
     if [ "$budget" -le 0 ]; then
         deficit=$((1000 - MTOKENS))
 
         [ "$deficit" -lt 1 ] && deficit=1
 
         wait_ms=$(((deficit * 1000 + _QPS - 1) / _QPS))
+
         nap_for_tokens "$wait_ms"
+
         continue
     fi
 
     i=0
 
     while [ "$i" -lt "$budget" ]; do
+
         next_domain || break
+
         d="$CUR"
 
         [ -n "$d" ] || continue
 
+        if [ "$QUERIES_START" -eq 0 ]; then
+            QUERIES_START="$(now_ms)"
+        fi
+
         if ! printf '%s\n' "$d" >&4; then
-            log 1 "worker queue write failed"
+
+            log 0 "${TXT_BOLD}${TXT_RED}worker queue write failed for domain: ${TXT_LIGHT_GREY}$d${TXT_N_C}"
+
             break 2
         fi
 
         SENT=$((SENT + 1))
+        LAST_SENT_MS="$(now_ms)"
         MTOKENS=$((MTOKENS - 1000))
         i=$((i + 1))
     done
 
+    if [ "$_DURATION" -gt 0 ] && [ "$DOMAINS_EOF" -eq 1 ]; then
+
+        log 3 "${TXT_BLUE}domain list exhausted in finite mode${TXT_N_C}"
+
+        log 4 "${TXT_GREY}ending query loop${TXT_N_C}"
+
+        break
+    fi
+
 done
 
 exec 3<&-
+
 stop_worker_pool
 
 END_MS="$(now_ms)"
-ELAPSED_MS=$((END_MS - START_TS))
-RUN_MS=$((END_MS - SCRIPT_START))
 
-if [ "$ELAPSED_MS" -gt 0 ]; then
-    ach_qps="$(awk -v s="$SENT" -v ms="$ELAPSED_MS" 'BEGIN { printf "%.2f", s / (ms / 1000) }')"
-else
-    ach_qps="0"
-fi
+if [ -t 2 ] && [ "$_VERBOSITY" -gt 0 ]; then
 
-ELAPSED_HUMAN="$(format_runtime_ms "$ELAPSED_MS")"
-RUN_HUMAN="$(format_runtime_ms "$RUN_MS")"
+    runtime_report
 
-if [ -t 1 ] && [ "$_VERBOSITY" -gt 0 ]; then
-    printf '%s\n' "${SENT}q / ${ELAPSED_HUMAN} = ${ach_qps}qps, took ${RUN_HUMAN}." >&2
 fi

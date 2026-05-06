@@ -10,7 +10,8 @@ ROOT_DIR="$(
 CLI="$ROOT_DIR/dndistress"
 OUT="$ROOT_DIR/README.md"
 
-TOPICS_FALLBACK="general usage topics info description runtime resolver install uninstall show version binary burst column custom directory duration file format local location maximum output port qps remote seconds top type url verbosity"
+TOPICS_FALLBACK="general usage topics info description runtime resolver domains status install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type url verbosity"
+TOPICS_PREFERRED="description general info usage runtime resolver domains status topics install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type url verbosity"
 
 if [ ! -f "$CLI" ]; then
     printf '%s\n' "error: CLI not found at $CLI" >&2
@@ -18,11 +19,14 @@ if [ ! -f "$CLI" ]; then
 fi
 
 if [ ! -x "$CLI" ]; then
+
     chmod +x "$CLI"
+
 fi
 
 read_cli_var() {
-    key="$1"
+    local key="$1"
+
     awk -F= -v key="$key" '
         $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
             v=$2
@@ -33,10 +37,13 @@ read_cli_var() {
             exit
         }
     ' "$CLI"
+
 }
 
 read_generated_at() {
+
     date -u '+%Y-%m-%d %H:%M:%S UTC'
+
 }
 
 DOC_VERSION="$(read_cli_var VERSION)"
@@ -45,47 +52,61 @@ DOC_COPYRIGHT_YEAR="$(read_cli_var COPYRIGHT_YEAR)"
 DOC_CONTACT="$(read_cli_var CONTACT)"
 DOC_LICENSE="$(read_cli_var LICENSE)"
 
-if [ -z "${DOC_VERSION:-}" ]; then
-    DOC_VERSION="unknown"
-fi
+[ -n "${DOC_VERSION:-}" ] || DOC_VERSION="unknown"
 
-if [ -z "${DOC_AUTHOR:-}" ]; then
-    DOC_AUTHOR="unknown"
-fi
+[ -n "${DOC_AUTHOR:-}" ] || DOC_AUTHOR="unknown"
 
-if [ -z "${DOC_COPYRIGHT_YEAR:-}" ]; then
-    DOC_COPYRIGHT_YEAR="unknown"
-fi
+[ -n "${DOC_COPYRIGHT_YEAR:-}" ] || DOC_COPYRIGHT_YEAR="unknown"
 
-if [ -z "${DOC_CONTACT:-}" ]; then
-    DOC_CONTACT="unknown"
-fi
+[ -n "${DOC_CONTACT:-}" ] || DOC_CONTACT="unknown"
 
-if [ -z "${DOC_LICENSE:-}" ]; then
-    DOC_LICENSE="unknown"
-fi
+[ -n "${DOC_LICENSE:-}" ] || DOC_LICENSE="unknown"
 
+SCRIPT_NAME="$(basename -- "$0")"
 GENERATED_AT="$(read_generated_at)"
 
-mkdir -p "$(dirname -- "$OUT")"
+OUT_DIR="$(dirname -- "$OUT")"
+
+if ! mkdir -p "$OUT_DIR" 2>/dev/null; then
+    printf '%s\n' "error: failed to create output directory: $OUT_DIR" >&2
+    exit 1
+fi
+
+if [ ! -w "$OUT_DIR" ]; then
+    printf '%s\n' "error: output directory not writable: $OUT_DIR" >&2
+    exit 1
+fi
 
 run_help() {
-    topic="$1"
-    (
-        cd -- "$ROOT_DIR"
-        if [ "$topic" = "general" ]; then
-            ./dndistress --help
-        else
-            ./dndistress --help "$topic"
+    local topic="$1"
+
+    if [ "$topic" = "general" ]; then
+
+        if ! "$CLI" --help 2>&1; then
+            printf '%s\n' "error: failed to get help for topic '$topic'" >&2
+            return 1
         fi
-    )
+
+    else
+
+        if ! "$CLI" --help "$topic" 2>&1; then
+            printf '%s\n' "error: failed to get help for topic '$topic'" >&2
+            return 1
+        fi
+
+    fi
+
 }
 
 discover_topics() {
-    (
-        cd -- "$ROOT_DIR"
-        ./dndistress --help topics
-    ) | awk '
+    local output
+
+    if ! output="$("$CLI" --help topics 2>&1)"; then
+        printf '%s\n' "error: failed to discover topics from CLI" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$output" | awk '
         /^[[:space:]]+General:/  { sect=1; next }
         /^[[:space:]]+Commands:/ { sect=1; next }
         /^[[:space:]]+Options:/  { sect=1; next }
@@ -99,21 +120,77 @@ discover_topics() {
     ' | awk '!seen[$0]++' | grep -v '^help$' || true
 }
 
-TOPICS="$(discover_topics)"
-if [ -z "$TOPICS" ]; then
-    TOPICS="$TOPICS_FALLBACK"
-fi
+reorder_topics() {
+
+    awk -v pref="$TOPICS_PREFERRED" '
+        NF {
+            have[$1]=1
+            order_list[++order_n]=$1
+        }
+        END {
+            m=split(pref, p, " ")
+            for (i=1; i<=m; i++) {
+                if (have[p[i]]) {
+                    print p[i]
+                    emitted[p[i]]=1
+                }
+            }
+            for (i=1; i<=order_n; i++) {
+                if (!emitted[order_list[i]]) print order_list[i]
+            }
+        }
+    '
+
+}
+
+topic_group() {
+    case "$1" in
+        general|info|description|usage|runtime|resolver|status|domains|topics)
+            printf '%s\n' "General"
+            ;;
+        install|uninstall|show|version)
+            printf '%s\n' "Commands"
+            ;;
+        *)
+            printf '%s\n' "Options"
+            ;;
+    esac
+}
 
 emit_topic() {
-    topic="$1"
+    local topic="$1"
+
     printf '\n## %s\n\n' "$topic"
     printf '%s\n' '```text'
-    run_help "$topic"
+
+    if ! run_help "$topic"; then
+        printf '%s\n' "(error: failed to retrieve help for topic '$topic')"
+    fi
+
     printf '%s\n' '```'
 }
 
+TOPICS_NL="$(discover_topics || true)"
+if [ -z "$TOPICS_NL" ]; then
+    printf '%s\n' "warning: topic discovery failed; using fallback list" >&2
+    TOPICS_NL="$(printf '%s\n' "$TOPICS_FALLBACK" | tr ' ' '\n')"
+fi
+
+TOPICS_NL="$(printf '%s\n' "$TOPICS_NL" | reorder_topics)"
+
+mapfile -t TOPICS_ARR < <(printf '%s\n' "$TOPICS_NL" | awk 'NF')
+
 {
-cat <<EOF
+
+    cat <<EOF
+<!--
+  This file was generated by $SCRIPT_NAME at $GENERATED_AT.
+
+                        DO NOT edit this file directly.
+
+ Instead, edit the dndistress script and then run this script to regenerate it.
+-->
+
 # DNdistresS
 
 \`\`\`text
@@ -124,9 +201,9 @@ cat <<EOF
           | |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )
           |_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
 
-    Version: $DOC_VERSION
     Contact: $DOC_CONTACT
     License: $DOC_LICENSE
+    Version: $DOC_VERSION
 
     DNdistresS Copyright (C) $DOC_COPYRIGHT_YEAR $DOC_AUTHOR
 
@@ -140,15 +217,26 @@ cat <<EOF
 ## Index
 EOF
 
-    for t in $TOPICS; do
+    current_group=""
+    for t in "${TOPICS_ARR[@]}"; do
+        g="$(topic_group "$t")"
+        if [ "$g" != "$current_group" ]; then
+            printf '\n### %s\n' "$g"
+            current_group="$g"
+        fi
         printf '%s\n' "- [$t](#$t)"
     done
 
-    for t in $TOPICS; do
+    for t in "${TOPICS_ARR[@]}"; do
+
         emit_topic "$t"
+
     done
 
-    printf '\n---\n\n> Generated by `%s` on %s.\n' "$0" "$GENERATED_AT"
-} > "$OUT"
+    printf '\n---\n\n> Generated by %s at %s.\n' "$(basename -- "$0")" "$GENERATED_AT"
+} > "$OUT" || {
+    printf '%s\n' "error: failed to write to $OUT" >&2
+    exit 1
+}
 
 printf '%s\n' "generated: $OUT"
