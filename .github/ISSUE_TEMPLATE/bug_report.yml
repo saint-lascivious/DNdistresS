@@ -1,0 +1,86 @@
+name: Bug report
+description: Report a reproducible problem in DNdistresS
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this issue. Please include enough detail to reproduce.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: Briefly describe the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps and command(s)
+      placeholder: |
+        1. Run `...`
+        2. Run `...`
+        3. Observe `...`
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DNdistresS version
+      description: Output of `./dndistress --version`
+      placeholder: "DNdistresS 1.0.2 master"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tool
+    attributes:
+      label: DNS query tool
+      options:
+        - auto
+        - dig
+        - nslookup
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Paste relevant terminal output (redact secrets if needed)
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, shell, resolver target, and anything relevant
+      placeholder: |
+        OS:
+        Shell:
+        Resolver:
+        Command used:

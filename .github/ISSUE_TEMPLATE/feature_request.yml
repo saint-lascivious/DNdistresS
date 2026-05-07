@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an improvement for DNdistresS
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem are you trying to solve?
+      placeholder: Describe the pain point.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen?
+      placeholder: Describe your preferred behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternatives or workarounds?
+      placeholder: Optional
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, examples, logs, or screenshots
+      placeholder: Optional

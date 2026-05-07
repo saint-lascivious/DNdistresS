@@ -259,6 +259,8 @@ EOF
 - [usage](#usage)
 - [uninstall](#uninstall)
 
+Security: see [SECURITY.md](SECURITY.md).
+
 ## Index
 EOF
 
