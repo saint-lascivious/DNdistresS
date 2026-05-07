@@ -10,8 +10,8 @@ ROOT_DIR="$(
 CLI="$ROOT_DIR/dndistress"
 OUT="$ROOT_DIR/README.md"
 
-TOPICS_FALLBACK="general usage topics info description runtime resolver domains status install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type url verbosity"
-TOPICS_PREFERRED="description general info usage runtime resolver domains status topics install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type url verbosity"
+TOPICS_FALLBACK="general usage topics info description runtime resolver domains environment status install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type deny-any url verbosity"
+TOPICS_PREFERRED="description general info usage runtime resolver domains environment status topics install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type deny-any url verbosity"
 
 if [ ! -f "$CLI" ]; then
     printf '%s\n' "error: CLI not found at $CLI" >&2
@@ -145,7 +145,7 @@ reorder_topics() {
 
 topic_group() {
     case "$1" in
-        general|info|description|usage|runtime|resolver|status|domains|topics)
+        general|info|description|usage|runtime|resolver|domains|environment|status|topics)
             printf '%s\n' "General"
             ;;
         install|uninstall|show|version)
@@ -213,6 +213,12 @@ mapfile -t TOPICS_ARR < <(printf '%s\n' "$TOPICS_NL" | awk 'NF')
 \`\`\`
 
 ---
+
+## Quick Start
+
+- [install](#install)
+- [usage](#usage)
+- [uninstall](#uninstall)
 
 ## Index
 EOF
