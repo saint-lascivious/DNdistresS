@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.0.1"
+VERSION="1.0.2"
 BRANCH="master"
 
 LICENSE="GNU General Public License v3.0 or later"
@@ -1219,6 +1219,150 @@ EOF
 
 }
 
+COMPLETION_BASENAME="dndistress"
+COMPLETION_DIR="${COMPLETION_DIR:-/etc/bash_completion.d}"
+
+write_bash_completion() {
+    out="$1"
+
+    cat > "$out" <<'EOF'
+_dndistress_completion() {
+    local cur prev opts cmd_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    local commands="install uninstall show help version"
+    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -r -s \
+        -t -T -u -U -v -V --binary --burst --column --custom --directory \
+        --duration --file --format --help --install --local --location \
+        --maximum --output --port --qps --remote --seconds --top --type \
+        --uninstall --url --verbosity --show --show-warranty --show-conditions \
+        --deny-any --allow-any --force-maximum"
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$commands $global_opts" -- "$cur") )
+        return 0
+    fi
+
+    local cmd="${COMP_WORDS[1]}"
+
+    case "$prev" in
+        -b|--binary)
+            COMPREPLY=( $(compgen -W "auto dig nslookup" -- "$cur") )
+            return 0
+            ;;
+        -B|--burst)
+            COMPREPLY=( $(compgen -W "32 64 128 256 512" -- "$cur") )
+            return 0
+            ;;
+        -c|--column)
+            COMPREPLY=( $(compgen -W "0 1 2 3" -- "$cur") )
+            return 0
+            ;;
+        -C|--custom)
+            _filedir
+            return 0
+            ;;
+        -d|--directory)
+            _filedir -d
+            return 0
+            ;;
+        -D|--duration)
+            COMPREPLY=( $(compgen -W "300 600 3600 86400" -- "$cur") )
+            return 0
+            ;;
+        -f|--file)
+            _filedir
+            return 0
+            ;;
+        -F|--format)
+            COMPREPLY=( $(compgen -W "auto plain csv" -- "$cur") )
+            return 0
+            ;;
+        -i|--install)
+            _filedir -d
+            return 0
+            ;;
+        -l|--local)
+            COMPREPLY=( $(compgen -W "127.0.0.1 ::1" -- "$cur") )
+            return 0
+            ;;
+        -L|--location)
+            COMPREPLY=( $(compgen -W "local remote" -- "$cur") )
+            return 0
+            ;;
+        -m|--maximum)
+            COMPREPLY=( $(compgen -W "4 8 16 32 64 128 256!" -- "$cur") )
+            return 0
+            ;;
+        -o|--output)
+            COMPREPLY=( $(compgen -W "quiet answer" -- "$cur") )
+            return 0
+            ;;
+        -p|--port)
+            COMPREPLY=( $(compgen -W "53 5353 8853" -- "$cur") )
+            return 0
+            ;;
+        -q|--qps)
+            COMPREPLY=( $(compgen -W "10 50 100 500 1000" -- "$cur") )
+            return 0
+            ;;
+        -r|--remote)
+            COMPREPLY=( $(compgen -W "8.8.8.8 1.1.1.1 2606:4700:4700::1111" -- "$cur") )
+            return 0
+            ;;
+        -s|--seconds)
+            COMPREPLY=( $(compgen -W "0 300 3600 86400 604800" -- "$cur") )
+            return 0
+            ;;
+        -t|--top)
+            COMPREPLY=( $(compgen -W "100 1000 5000 10000" -- "$cur") )
+            return 0
+            ;;
+        -T|--type)
+            COMPREPLY=( $(compgen -W "A AAAA MX TXT NS CNAME SOA PTR SRV CAA" -- "$cur") )
+            return 0
+            ;;
+        -u|--uninstall)
+            _filedir -d
+            return 0
+            ;;
+        -U|--url)
+            # URL argument, typically not completed
+            return 0
+            ;;
+        -V|--verbosity)
+            COMPREPLY=( $(compgen -W "0 1 2 3 4" -- "$cur") )
+            return 0
+            ;;
+        -S|--show|show)
+            COMPREPLY=( $(compgen -W "w c warranty conditions" -- "$cur") )
+            return 0
+            ;;
+    esac
+
+    if [[ "$cmd" == "show" ]]; then
+        COMPREPLY=( $(compgen -W "w c warranty conditions" -- "$cur") )
+        return 0
+    fi
+
+    if [[ "$cmd" == "install" || "$cmd" == "uninstall" ]]; then
+        if [[ $COMP_CWORD -eq 2 ]]; then
+            _filedir -d
+            return 0
+        fi
+    fi
+
+    COMPREPLY=( $(compgen -W "$global_opts" -- "$cur") )
+    return 0
+}
+
+complete -o bashdefault -o default -o filenames -F _dndistress_completion dndistress
+EOF
+
+}
+
 do_install() {
     target="$1"
 
@@ -1282,7 +1426,11 @@ do_install() {
 
     systemctl_maybe enable --now "${UNIT_BASE}.timer"
 
-    log 3 "${BLUE}enabled and started timer unit ${L_GREY}${UNIT_BASE}.timer${N_C}"
+    write_bash_completion "$COMPLETION_DIR/$COMPLETION_BASENAME"
+
+    log 3 "${BLUE}installed: ${L_GREY}$COMPLETION_DIR/$COMPLETION_BASENAME${N_C}"
+
+    log 4 "${GREY}wrote bash completion to ${L_GREY}$COMPLETION_DIR/$COMPLETION_BASENAME${N_C}"
 
     log 4 "${GREY}reloaded systemd daemon, cleared stale failed state, and enabled timer ${L_GREY}${UNIT_BASE}.timer${N_C}"
 
@@ -1321,6 +1469,12 @@ do_uninstall() {
     systemctl_maybe reset-failed "${UNIT_BASE}.service" "${UNIT_BASE}.timer"
 
     log 4 "${GREY}reloaded systemd daemon and cleared stale failed state${N_C}"
+
+    rm -f "$COMPLETION_DIR/$COMPLETION_BASENAME" || true
+
+    log 3 "${BLUE}removed bash completion for ${L_GREY}$COMPLETION_BASENAME${N_C}"
+
+    log 4 "${GREY}removed bash completion from ${L_GREY}$COMPLETION_DIR/${N_C}"
 
     log 3 "${BLUE}removed units and binary for ${L_GREY}$UNIT_BASE${N_C}"
 
@@ -2485,6 +2639,8 @@ Topic: environment
   DEFAULT_RUNTIME_ROOT                  $DEFAULT_RUNTIME_ROOT
   STATUS_BASENAME                       $STATUS_BASENAME
   LOCK_BASENAME                         $LOCK_BASENAME
+  COMPLETION_BASENAME                   $COMPLETION_BASENAME
+  COMPLETION_DIR                        $COMPLETION_DIR
 EOF
 
             ;;
