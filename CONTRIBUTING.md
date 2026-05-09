@@ -1,6 +1,6 @@
 # Contributing to DNdistresS
 
-Thanks for contributing.
+Thank you for your interest in contributing to DNdistresS.
 
 ## How to contribute
 
@@ -15,9 +15,9 @@ Thanks for contributing.
 ## Development notes
 
 - Keep changes small and readable.
-- Preserve POSIX shell compatibility (`#!/bin/sh`).
-- Avoid adding hard dependencies unless necessary.
-- Update help text/docs when behavior changes.
+- Preserve POSIX shell compatibility (`#!/bin/sh`). This is not optional.
+- Avoid adding hard dependencies unless absolutely required.
+- Update help texts or documentation when behavior changes.
 
 ## Quality checks (recommended)
 
