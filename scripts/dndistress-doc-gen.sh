@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# dndistress-doc-gen.sh - Generate README.md for dndistress.
+
 set -euo pipefail
 
 ROOT_DIR="$(
@@ -10,8 +12,7 @@ ROOT_DIR="$(
 CLI="$ROOT_DIR/dndistress"
 OUT="$ROOT_DIR/README.md"
 
-TOPICS_FALLBACK="general usage topics info description runtime resolver domains environment status install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type deny-any url verbosity"
-TOPICS_PREFERRED="description general info usage runtime resolver domains environment status topics install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type deny-any url verbosity"
+TOPICS_ORDER="description general info usage runtime resolver domains environment status topics install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type deny-any url verbosity"
 
 if [ ! -f "$CLI" ]; then
     printf '%s\n' "error: CLI not found at $CLI" >&2
@@ -65,7 +66,45 @@ DOC_LICENSE="$(read_cli_var LICENSE)"
 SCRIPT_NAME="$(basename -- "$0")"
 GENERATED_AT="$(read_generated_at)"
 
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+make_tmpdir() {
+    base="${1:-${TMPDIR:-/tmp}}"
+
+    if need_cmd mktemp; then
+        d="$(mktemp -d "$base/dndistress.XXXXXX" 2>/dev/null || true)"
+
+        if [ -n "$d" ] && [ -d "$d" ]; then
+            printf '%s\n' "$d"
+            return 0
+        fi
+
+    fi
+
+    umask 077
+    i=0
+
+    while [ "$i" -lt 1000 ]; do
+        d="$base/dndistress.$$.$i"
+
+        if mkdir "$d" 2>/dev/null; then
+            printf '%s\n' "$d"
+            return 0
+        fi
+
+        i=$((i + 1))
+    done
+
+    return 1
+}
+
 OUT_DIR="$(dirname -- "$OUT")"
+TMP_DIR="$(make_tmpdir)"
+TMP_OUT="$TMP_DIR/README.md"
+
+trap 'rm -fr "$TMP_DIR"' EXIT
 
 if ! mkdir -p "$OUT_DIR" 2>/dev/null; then
     printf '%s\n' "error: failed to create output directory: $OUT_DIR" >&2
@@ -118,11 +157,12 @@ discover_topics() {
             }
         }
     ' | awk '!seen[$0]++' | grep -v '^help$' || true
+
 }
 
 reorder_topics() {
 
-    awk -v pref="$TOPICS_PREFERRED" '
+    awk -v pref="$TOPICS_ORDER" '
         NF {
             have[$1]=1
             order_list[++order_n]=$1
@@ -144,6 +184,7 @@ reorder_topics() {
 }
 
 topic_group() {
+
     case "$1" in
         general|info|description|usage|runtime|resolver|domains|environment|status|topics)
             printf '%s\n' "General"
@@ -155,6 +196,7 @@ topic_group() {
             printf '%s\n' "Options"
             ;;
     esac
+
 }
 
 emit_topic() {
@@ -170,20 +212,55 @@ emit_topic() {
     printf '%s\n' '```'
 }
 
+capture_smoke_output() {
+    local smoke_script="$ROOT_DIR/tests/run-smoke-test.sh"
+    local output
+    local status=0
+
+    if [ ! -f "$smoke_script" ]; then
+        printf '%s\n' "(smoke test script not found at tests/run-smoke-test.sh)"
+        return 0
+    fi
+
+    output="$(sh "$smoke_script" 2>&1)" || status=$?
+
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "warning: smoke tests failed during doc generation (exit $status)" >&2
+    fi
+
+    printf '%s\n' "$output" | sed 's/^TIME: .*/TIME: 0.xxxs/'
+}
+
 TOPICS_NL="$(discover_topics || true)"
+
 if [ -z "$TOPICS_NL" ]; then
     printf '%s\n' "warning: topic discovery failed; using fallback list" >&2
-    TOPICS_NL="$(printf '%s\n' "$TOPICS_FALLBACK" | tr ' ' '\n')"
+    TOPICS_NL="$(printf '%s\n' "$TOPICS_ORDER" | tr ' ' '\n')"
 fi
 
 TOPICS_NL="$(printf '%s\n' "$TOPICS_NL" | reorder_topics)"
 
 mapfile -t TOPICS_ARR < <(printf '%s\n' "$TOPICS_NL" | awk 'NF')
 
-emit_testing_section() {
+SMOKE_OUTPUT="$(capture_smoke_output)"
+
+emit_development_section() {
     cat <<'EOF'
 
-## Smoke Test Suite
+## Development
+
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute
+to this project.
+
+### Security
+
+For security-related issues, see [SECURITY.md](SECURITY.md).
+
+Please do **not** open a public issue for security vulnerabilities.
+
+### Smoke Test Suite
 
 Smoke tests are run via:
 
@@ -191,30 +268,60 @@ Smoke tests are run via:
 
 This wrapper runs `tests/smoke-test.sh` and returns non-zero on failure.
 
-### Run tests
+#### Run tests
 
-#### Linux / macOS
+##### Linux / macOS / Windows (PowerShell + Git Bash)
 ```bash
 bash ./tests/run-smoke-test.sh
 ```
 
-#### Windows (PowerShell + Git Bash)
-```powershell
-bash ./tests/run-smoke-test.sh
-```
-
-#### Windows (WSL)
+##### Windows (WSL)
 ```powershell
 wsl bash ./tests/run-smoke-test.sh
 ```
 
-### Quiet mode
+#### Example run
+
+EOF
+
+    printf '%s\n' '```text'
+    printf '%s\n' "$SMOKE_OUTPUT"
+    printf '%s\n' '```'
+
+    cat <<'EOF'
+
+#### Quiet mode
 
 ```bash
 bash ./tests/run-smoke-test.sh --quiet
 ```
 
 Aliases: `q`, `-q`, `quiet`, `--quiet`.
+
+### Bug Reports
+
+Open an issue on [GitHub Issues](../../issues) with:
+
+- A description of the problem
+- Steps to reproduce
+- Expected vs actual behaviour
+- Script version (`dndistress --version`)
+
+### Feature Requests
+
+Feature requests are welcome via [GitHub Issues](../../issues).
+
+Please describe the use case, not just the desired behaviour.
+
+### Pull Requests
+
+Pull requests should:
+
+- Target the `master` branch
+- Include a clear description of what was changed and why
+- Update help texts or documentation when behavior changes
+- Trigger no ShellCheck warnings or errors
+- Pass the smoke test suite before submission
 EOF
 
 }
@@ -257,9 +364,6 @@ EOF
 
 - [install](#install)
 - [usage](#usage)
-- [uninstall](#uninstall)
-
-Security: see [SECURITY.md](SECURITY.md).
 
 ## Index
 EOF
@@ -274,8 +378,8 @@ EOF
         printf '%s\n' "- [$t](#$t)"
     done
 
-    printf '\n### Testing\n'
-    printf '%s\n' '- [smoke-test-suite](#smoke-test-suite)'
+    printf '\n### Development\n'
+    printf '%s\n' '- [development](#development)'
 
     for t in "${TOPICS_ARR[@]}"; do
 
@@ -283,18 +387,40 @@ EOF
 
     done
 
-    emit_testing_section
+    emit_development_section
 
     printf '\n---\n\n> Generated by %s at %s.\n' "$(basename -- "$0")" "$GENERATED_AT"
-} > "$OUT" || {
-    printf '%s\n' "error: failed to write to $OUT" >&2
+} > "$TMP_OUT" || {
+    printf '%s\n' "error: failed to write to temp file" >&2
     exit 1
 }
 
-printf '%s\n' "generated: $OUT"
+strip_timestamps() {
+    sed \
+        -e 's/This file was generated by .*/TIMESTAMP_LINE/' \
+        -e 's/Generated by .* at .*/TIMESTAMP_LINE/' \
+        -e 's/^> Generated by .*$/> Generated by SCRIPT at TIMESTAMP./' \
+        "$1"
+}
 
-printf '\n%s\n' "summary:"
-printf '  topics: %d\n' "${#TOPICS_ARR[@]}"
-printf '  sections: general, commands, options, testing\n'
-printf '  output: %s\n' "$OUT"
-printf '\n✓ documentation generated successfully.\n'
+if [ -f "$OUT" ] && diff -q <(strip_timestamps "$TMP_OUT") <(strip_timestamps "$OUT") > /dev/null 2>&1; then
+    printf '%s\n' "no content changes detected, skipping"
+    CONTENT_CHANGED=0
+else
+
+    cp "$TMP_OUT" "$OUT" || {
+        printf '%s\n' "error: failed to write to $OUT" >&2
+        exit 1
+    }
+
+    printf '%s\n' "generated dndistress README.md"
+    CONTENT_CHANGED=1
+fi
+
+if [ "$CONTENT_CHANGED" -eq 1 ]; then
+    printf '\n%s\n' "summary:"
+    printf '  topics: %d\n' "${#TOPICS_ARR[@]}"
+    printf '  sections: general, commands, options, development\n'
+    printf '  output: %s\n' "$OUT"
+    printf '\n✓ documentation generated successfully.\n'
+fi
