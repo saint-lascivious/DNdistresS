@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.1.0"
+VERSION="1.1.1"
 BRANCH="master"
 
 LICENSE="GNU General Public License v3.0 or later"
