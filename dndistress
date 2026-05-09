@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.1.1"
+VERSION="1.2.0"
 BRANCH="master"
 
 LICENSE="GNU General Public License v3.0 or later"
@@ -93,6 +93,7 @@ _MAXIMUM="${_MAXIMUM:-24}"
 _OUTPUT="${_OUTPUT:-quiet}"
 _PORT="${_PORT:-53}"
 _QPS="${_QPS:-50}"
+_RANDOM="${_RANDOM:-0}"
 _REMOTE="${_REMOTE:-}"
 _SECONDS="${_SECONDS:-86400}"
 _TOP="${_TOP:-10000}"
@@ -115,7 +116,7 @@ SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
     [-D _DURATION] [-f _FILE] [-F _FORMAT] [-h] [-i _INSTALL] [-l _LOCAL]
     [-L _LOCATION] [-m _MAXIMUM[!]] [--force-maximum] [-o _OUTPUT] [-p _PORT]
     [-q _QPS] [-r _REMOTE] [-s _SECONDS] [-S {w|c|warranty|conditions}]
-    [-t (N|PATTERN)...] [-T _TYPE] [-u _UNINSTALL] [-U _URL] [-v]
+    [-t (N|PATTERN)...] [-T _TYPE] [-R] [-u _UNINSTALL] [-U _URL] [-v]
     [-V _VERBOSITY] [--deny-any] [--allow-any]
 '
 
@@ -425,6 +426,7 @@ exit_with_status() {
     "output": "$(printf '%s' "$_OUTPUT" | sed 's/"/\\"/g')",
     "port": $_PORT,
     "qps": $_QPS,
+    "random": $_RANDOM,
     "remote": "$(printf '%s' "$_REMOTE" | sed 's/"/\\"/g')",
     "seconds": $_SECONDS,
     "top": $_TOP,
@@ -1061,6 +1063,15 @@ case "$_VERBOSITY" in
         ;;
 esac
 
+case "$_RANDOM" in
+    0|1)
+        ;;
+    *)
+        log 1 "${RED}_RANDOM must be one (${L_GREY}1${RED}) of ${L_GREY}0${RED}|${L_GREY}1${RED}, got: ${L_GREY}$_RANDOM${N_C}"
+        exit_with_status 2
+        ;;
+esac
+
 is_absolute_path() {
 
     case "$1" in
@@ -1237,12 +1248,12 @@ _dndistress_completion() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local commands="install uninstall show help version"
-    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -r -s \
+    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -R -r -s \
         -t -T -u -U -v -V --binary --burst --column --custom --directory \
         --duration --file --format --help --install --local --location \
-        --maximum --output --port --qps --remote --seconds --top --type \
-        --uninstall --url --verbosity --show --show-warranty --show-conditions \
-        --deny-any --allow-any --force-maximum"
+        --maximum --output --port --qps --random --remote --seconds --top \
+        --type --uninstall --url --verbosity --show --show-warranty \
+        --show-conditions --deny-any --allow-any --force-maximum"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands $global_opts" -- "$cur") )
@@ -1915,46 +1926,96 @@ make_tmpdir() {
     return 1
 }
 
+RANDOM_RR_POOL="A AAAA CNAME MX NS TXT"
+RANDOM_POOL_COUNT=0
+RAND_STATE=1
+
+init_random_rr_pool() {
+    set -- "$RANDOM_RR_POOL"
+    RANDOM_POOL_COUNT=$#
+
+    [ "$RANDOM_POOL_COUNT" -gt 0 ] || RANDOM_POOL_COUNT=1
+
+    seed="$(now_ms)"
+
+    case "$seed" in
+        ''|*[!0-9]*)
+            seed=1
+            ;;
+    esac
+
+    RAND_STATE=$(( (seed + $$) % 2147483647 ))
+
+    [ "$RAND_STATE" -gt 0 ] || RAND_STATE=1
+
+}
+
+pick_query_type() {
+
+    if [ "${_RANDOM:-0}" -ne 1 ]; then
+        printf '%s\n' "$_TYPE"
+        return 0
+    fi
+
+    [ "$RANDOM_POOL_COUNT" -gt 0 ] || init_random_rr_pool
+
+    RAND_STATE=$(( (RAND_STATE * 1103515245 + 12345) % 2147483647 ))
+    idx=$(( (RAND_STATE % RANDOM_POOL_COUNT) + 1 ))
+
+    i=1
+    for t in $RANDOM_RR_POOL; do
+
+        if [ "$i" -eq "$idx" ]; then
+            printf '%s\n' "$t"
+            return 0
+        fi
+
+        i=$((i + 1))
+    done
+
+    printf '%s\n' "$_TYPE"
+}
+
 query_one() {
     d="$1"
+    qtype="${2:-$_TYPE}"
 
     case "$_BINARY" in
         dig)
+
             if [ "$_OUTPUT" = "answer" ]; then
 
-                dig @"$RESOLVER" -p "$_PORT" "$d" "$_TYPE" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null | \
-
+                dig @"$RESOLVER" -p "$_PORT" "$d" "$qtype" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null | \
                     tee -a "$ANSWERS_FILE" | \
-
                     awk -v GREY="$GREY" -v N_C="$N_C" 'NF { print "   " GREY "•" N_C " " $0 }'
             else
 
-                dig @"$RESOLVER" -p "$_PORT" "$d" "$_TYPE" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null >> "$ANSWERS_FILE"
+                dig @"$RESOLVER" -p "$_PORT" "$d" "$qtype" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null >> "$ANSWERS_FILE"
 
             fi
+
             ;;
         nslookup)
+
             if [ "$_OUTPUT" = "answer" ]; then
 
-                nslookup -port="$_PORT" -type="$_TYPE" "$d" "$RESOLVER" 2>/dev/null | \
-
+                nslookup -port="$_PORT" -type="$qtype" "$d" "$RESOLVER" 2>/dev/null | \
                     awk '
                         /^Name:/ { seen=1; next }
                         seen && /^Address: /   { sub(/^Address: /,""); print $0 }
                         seen && /^Addresses: / { sub(/^Addresses: /,""); print $0 }
                     ' | tee -a "$ANSWERS_FILE" | \
-
                     awk -v GREY="$GREY" -v N_C="$N_C" 'NF { print "   " GREY "•" N_C " " $0 }'
 
             else
 
-                nslookup -port="$_PORT" -type="$_TYPE" "$d" "$RESOLVER" 2>/dev/null | \
-
+                nslookup -port="$_PORT" -type="$qtype" "$d" "$RESOLVER" 2>/dev/null | \
                     awk '
                         /^Name:/ { seen=1; next }
                         seen && /^Address: /   { sub(/^Address: /,""); print $0 }
                         seen && /^Addresses: / { sub(/^Addresses: /,""); print $0 }
                     ' >> "$ANSWERS_FILE"
+
             fi
 
             ;;
@@ -1982,11 +2043,23 @@ start_worker_pool() {
 
     while [ "$i" -lt "$workers" ]; do
         (
-            while IFS= read -r d; do
+
+            while IFS= read -r job; do
+                [ -n "$job" ] || continue
+
+                case "$job" in
+                    *'|'*)
+                        qtype=${job%%|*}
+                        d=${job#*|}
+                        ;;
+                    *)
+                        qtype="$_TYPE"
+                        d="$job"
+                        ;;
+                esac
 
                 [ -n "$d" ] || continue
-
-                query_one "$d"
+                query_one "$d" "$qtype"
 
             done < "$QUEUE_FIFO"
 
@@ -2083,13 +2156,13 @@ Help topics:
 
   Options:
     binary burst column custom directory duration file format local location
-    maximum force-maximum output port qps remote seconds top type deny-any url
-    verbosity
+    maximum force-maximum output port qps random remote seconds top type
+    deny-any url verbosity
 
   Aliases accepted:
     -i/--install, -u/--uninstall, -v/--version, -h/--help, -S/--show,
     --show-warranty, --show-conditions, --force-maximum,
-    -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-r/-s/-t/-T/-U/-V
+    -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-R/-r/-s/-t/-T/-U/-V
 EOF
 
 }
@@ -2616,6 +2689,7 @@ Topic: environment
   _OUTPUT      (-o, --output)           $_OUTPUT
   _PORT        (-p, --port)             $_PORT
   _QPS         (-q, --qps)              $_QPS
+  _RANDOM      (-R, --random)           $_RANDOM
   _REMOTE      (-r, --remote)           $remote_disp
   _SECONDS     (-s, --seconds)          $_SECONDS
   _TOP         (-t, --top)              $_TOP
@@ -2989,6 +3063,29 @@ Validation: positive integer.
 EOF
 
             ;;
+        random)
+
+            cat <<EOF
+Topic: random (-R, --random)
+
+Meaning:
+  Enables per-query RR type randomization from a built-in common pool.
+
+Pool:
+  A AAAA CNAME MX NS TXT
+
+Default: $_RANDOM (0=off, 1=on)
+
+Behavior:
+  When enabled, DNdistresS picks one RR type from the pool for each
+  queued query before handing work to workers. This makes mixed query
+  traffic look more organic than a single fixed RR type.
+
+Note:
+  -T/--type is still used when random mode is disabled.
+EOF
+
+            ;;
         remote)
 
             cat <<EOF
@@ -3262,6 +3359,9 @@ canonical_help_topic() {
             ;;
         qps|-q|q|--qps)
             printf '%s\n' "qps"
+            ;;
+        random|-R|R|--random)
+            printf '%s\n' "random"
             ;;
         remote|-r|r|--remote)
             printf '%s\n' "remote"
@@ -3844,6 +3944,11 @@ EOF
                 _QPS="$2"
                 shift 2
                 ;;
+            -R|R|--random|random)
+                SEEN_NONEXCLUSIVE=1
+                _RANDOM=1
+                shift
+                ;;
             -r|r|--remote|remote)
                 SEEN_NONEXCLUSIVE=1
 
@@ -3959,6 +4064,8 @@ EOF
                 shift 2
                 ;;
             -V|V|--verbosity|verbosity)
+                SEEN_NONEXCLUSIVE=1
+
                 need_optarg "$1" "$@"
 
                 _VERBOSITY="$2"
@@ -4329,7 +4436,7 @@ EOF
         top_filters_disp="${_TOP_FILTERS:-(${L_GREY}none${GREY})}"
 
         log 4 "${GREY}effective config:${N_C}"
-        log 4 "  ${L_GREY}BINARY=$_BINARY OUTPUT=$_OUTPUT LOCATION=$_LOCATION RESOLVER=$RESOLVER PORT=$_PORT TYPE=$_TYPE${N_C}"
+        log 4 "  ${L_GREY}BINARY=$_BINARY OUTPUT=$_OUTPUT LOCATION=$_LOCATION RESOLVER=$RESOLVER PORT=$_PORT TYPE=$_TYPE RANDOM=$_RANDOM${N_C}"
         log 4 "  ${L_GREY}QPS=$_QPS BURST=$_BURST MAXIMUM=$_MAXIMUM DURATION=$_DURATION${N_C}"
         log 4 "  ${L_GREY}TOP=$_TOP TOP_FILTERS=$top_filters_disp FORMAT=$_FORMAT COLUMN=$_COLUMN${N_C}"
         log 4 "  ${L_GREY}DIRECTORY=$_DIRECTORY CUSTOM=$_CUSTOM${N_C}"
@@ -4871,6 +4978,11 @@ EOF
 
     QUERIES_START=0
 
+    if [ "$_RANDOM" -eq 1 ]; then
+        init_random_rr_pool
+        log 3 "${BLUE}random RR mode enabled with pool: ${L_GREY}$RANDOM_RR_POOL${N_C}"
+    fi
+
     while :; do
         now_s="$(now_ms)"
         elapsed_total=$(( (now_s - START_TS) / 1000 ))
@@ -4921,11 +5033,13 @@ EOF
 
             [ -n "$d" ] || continue
 
+            qtype="$(pick_query_type)"
+
             if [ "$QUERIES_START" -eq 0 ]; then
                 QUERIES_START="$(now_ms)"
             fi
 
-            if ! printf '%s\n' "$d" >&4; then
+            if ! printf '%s\n' "${qtype}|$d" >&4; then
 
                 log 0 "${BOLD}${RED}worker queue write failed for domain: ${L_GREY}$d${N_C}"
 

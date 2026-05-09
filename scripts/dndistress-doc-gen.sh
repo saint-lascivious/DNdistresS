@@ -12,7 +12,11 @@ ROOT_DIR="$(
 CLI="$ROOT_DIR/dndistress"
 OUT="$ROOT_DIR/README.md"
 
-TOPICS_ORDER="description general info usage runtime resolver domains environment status topics install uninstall show version binary burst column custom directory duration file format local location maximum force-maximum output port qps remote seconds top type deny-any url verbosity"
+TOPICS_ORDER="description general info usage runtime resolver domains \
+    environment status topics install uninstall show version binary burst \
+    column custom directory duration file format local location maximum \
+    force-maximum output port qps random remote seconds top type deny-any \
+    url verbosity"
 
 if [ ! -f "$CLI" ]; then
     printf '%s\n' "error: CLI not found at $CLI" >&2

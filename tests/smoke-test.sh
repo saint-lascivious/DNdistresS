@@ -330,6 +330,26 @@ if has_lib_func is_port; then
 
 fi
 
+if has_lib_func pick_query_type; then
+
+    assert_ok_cmd "pick_query_type function exists" \
+        run_in_lib pick_query_type >/dev/null
+
+    picked="$(run_in_lib eval '_RANDOM=0; _TYPE=A; pick_query_type')"
+    assert_eq "pick_query_type with _RANDOM=0 returns _TYPE" "$picked" "A"
+
+    picked="$(run_in_lib eval '_RANDOM=1; init_random_rr_pool; pick_query_type')"
+    assert_contains "pick_query_type with _RANDOM=1 returns from pool" "$picked" "A"
+
+fi
+
+if has_lib_func init_random_rr_pool; then
+
+    assert_ok_cmd "init_random_rr_pool initializes pool" \
+        run_in_lib init_random_rr_pool
+
+fi
+
 if has_lib_func is_absolute_path; then
 
     assert_fail_cmd "is_absolute_path rejects relative paths" \
@@ -471,6 +491,10 @@ assert_contains "help general shows usage" "$help_out" "Usage:"
 help_out="$("$SCRIPT" --help qps 2>&1)"
 
 assert_contains "help for qps option works" "$help_out" "queries/sec"
+
+help_out="$("$SCRIPT" --help random 2>&1)"
+
+assert_contains "help for random option works" "$help_out" "RR type randomization"
 
 if [ "$fail" -gt 0 ]; then
     END_MS="$(now_epoch_ms)"
