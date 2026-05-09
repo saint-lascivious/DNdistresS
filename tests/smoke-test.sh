@@ -1,27 +1,75 @@
 #!/bin/sh
 
+# smoke-test.sh - A suite of smoke tests for dndistress.
+
 set -eu
+
+QUIET=0
+
+while [ "$#" -gt 0 ]; do
+
+    case "$1" in
+        q|-q|quiet|--quiet)
+            QUIET=1
+            ;;
+        h|-h|help|--help)
+            printf 'Usage: %s [q|-q|quiet|--quiet]\n' "${0##*/}"
+            exit 0
+            ;;
+        *)
+            printf 'error: unknown option: %s\n' "$1" >&2
+            printf 'Usage: %s [q|-q|quiet|--quiet]\n' "${0##*/}" >&2
+            exit 2
+            ;;
+    esac
+
+    shift
+done
+
+if [ "$QUIET" -eq 1 ]; then
+    exec >/dev/null 2>&1
+fi
 
 ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 SCRIPT="$ROOT_DIR/dndistress"
 
-now_epoch() {
-    date +%s 2>/dev/null || printf '0'
+now_epoch_ms() {
+    ms="$(date +%s%3N 2>/dev/null || true)"
+
+    case "$ms" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s\n' "$ms"; return ;;
+    esac
+
+    ns="$(date +%s%N 2>/dev/null || true)"
+
+    case "$ns" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s\n' "$((ns / 1000000))"; return ;;
+    esac
+
+    s="$(date +%s 2>/dev/null || printf '0')"
+
+    case "$s" in
+        ''|*[!0-9]*) s=0 ;;
+    esac
+
+    printf '%s\n' "$((s * 1000))"
 }
 
-START_TS="$(now_epoch)"
+START_MS="$(now_epoch_ms)"
 
 pass=0
 fail=0
 
 ok() {
     pass=$((pass + 1))
-    printf '  ok - %s\n' "$1"
+    printf ' - %s ✓\n' "$1"
 }
 
 not_ok() {
     fail=$((fail + 1))
-    printf '  not ok - %s\n' "$1"
+    printf ' - %s ✗\n' "$1"
 }
 
 assert_eq() {
@@ -239,10 +287,64 @@ assert_contains "help topics includes deny-any" "$topics_out" "deny-any"
 
 assert_fail_cmd "CLI unknown option fails" run_script_quiet --definitely-not-a-real-option
 
+if has_lib_func is_ipv4_addr; then
+
+    assert_ok_cmd "is_ipv4_addr validates valid IPv4" \
+        run_in_lib is_ipv4_addr "192.168.1.1"
+
+    assert_fail_cmd "is_ipv4_addr rejects invalid IPv4" \
+        run_in_lib is_ipv4_addr "256.1.1.1"
+
+fi
+
+if has_lib_func is_ipv6_addr_basic; then
+
+    assert_ok_cmd "is_ipv6_addr_basic validates IPv6" \
+        run_in_lib is_ipv6_addr_basic "::1"
+
+fi
+
+if has_lib_func is_local_ipv4; then
+
+    assert_ok_cmd "is_local_ipv4 recognizes loopback" \
+        run_in_lib is_local_ipv4 "127.0.0.1"
+
+    assert_ok_cmd "is_local_ipv4 recognizes private ranges" \
+        run_in_lib is_local_ipv4 "10.0.0.1"
+
+fi
+
+if has_lib_func is_port; then
+
+    assert_ok_cmd "is_port accepts valid port 53" \
+        run_in_lib is_port "53"
+
+    assert_ok_cmd "is_port accepts high port 65535" \
+        run_in_lib is_port "65535"
+
+    assert_fail_cmd "is_port rejects 0" \
+        run_in_lib is_port "0"
+
+    assert_fail_cmd "is_port rejects 65536" \
+        run_in_lib is_port "65536"
+
+fi
+
+if has_lib_func is_absolute_path; then
+
+    assert_fail_cmd "is_absolute_path rejects relative paths" \
+        run_in_lib is_absolute_path "./relative"
+
+    assert_ok_cmd "is_absolute_path accepts absolute paths" \
+        run_in_lib is_absolute_path "/etc/hosts"
+
+fi
+
 if has_lib_func parse_top_opt && has_lib_func parse_duration; then
     t="$(parse_top_capture 5000)"
     count="$(printf '%s\n' "$t" | sed -n '1p')"
     filters="$(printf '%s\n' "$t" | sed -n '2p')"
+
     assert_eq "parse_top_opt count only: count" "$count" "5000"
 
     assert_eq "parse_top_opt count only: filters" "$filters" ""
@@ -304,6 +406,19 @@ else
 
 fi
 
+if has_lib_func rr_type_from_id; then
+
+    assert_eq "rr_type_from_id maps 1 to A" \
+        "$(run_in_lib rr_type_from_id 1)" "A"
+
+    assert_eq "rr_type_from_id maps 28 to AAAA" \
+        "$(run_in_lib rr_type_from_id 28)" "AAAA"
+
+    assert_fail_cmd "rr_type_from_id rejects invalid ID" \
+        run_in_lib rr_type_from_id 99999
+
+fi
+
 assert_eq "filter no filters returns all" "$(run_filter_count '')" "6"
 
 assert_eq "filter whitespace-only returns all" "$(run_filter_count '   ')" "6"
@@ -325,24 +440,53 @@ assert_eq "filter escaped dot regex /example\\.com$/" "$(run_filter_count '/exam
 assert_eq "filter OR mix" "$(run_filter_count '.nz ||example.com /\.net$/')" "6"
 
 if awk_rejects_invalid_dynamic_regex; then
+
     assert_ok_cmd "filter invalid regex fails cleanly" filter_count_should_fail '/(unclosed/'
+
 else
+
     ok "filter invalid regex behavior is awk-dependent (skipped)"
+
 fi
 
+assert_contains "version output contains branch" \
+    "$("$SCRIPT" --version 2>&1)" "master"
+
+if has_lib_func compute_runtime_metrics; then
+    ok "compute_runtime_metrics function exists"
+fi
+
+warranty_out="$("$SCRIPT" show w 2>&1)"
+
+assert_contains "warranty shows disclaimer" "$warranty_out" "NO WARRANTY"
+
+conditions_out="$("$SCRIPT" show c 2>&1)"
+
+assert_contains "conditions shows GPL section 4" "$conditions_out" "Conveying Verbatim Copies"
+
+help_out="$("$SCRIPT" --help general 2>&1)"
+
+assert_contains "help general shows usage" "$help_out" "Usage:"
+
+help_out="$("$SCRIPT" --help qps 2>&1)"
+
+assert_contains "help for qps option works" "$help_out" "queries/sec"
+
 if [ "$fail" -gt 0 ]; then
-    END_TS="$(now_epoch)"
-    ELAPSED="$((END_TS - START_TS))"
-    [ "$ELAPSED" -lt 0 ] && ELAPSED=0
+    END_MS="$(now_epoch_ms)"
+    ELAPSED_MS="$((END_MS - START_MS))"
+
+    [ "$ELAPSED_MS" -lt 0 ] && ELAPSED_MS=0
 
     printf '\nFAIL: %s failed, %s passed\n' "$fail" "$pass"
-    printf 'TIME: %ss\n' "$ELAPSED"
+    printf 'TIME: %s.%03ds\n' "$((ELAPSED_MS / 1000))" "$((ELAPSED_MS % 1000))"
     exit 1
 fi
 
-END_TS="$(now_epoch)"
-ELAPSED="$((END_TS - START_TS))"
-[ "$ELAPSED" -lt 0 ] && ELAPSED=0
+END_MS="$(now_epoch_ms)"
+ELAPSED_MS="$((END_MS - START_MS))"
+
+[ "$ELAPSED_MS" -lt 0 ] && ELAPSED_MS=0
 
 printf '\nPASS: %s passed\n' "$pass"
-printf 'TIME: %ss\n' "$ELAPSED"
+printf 'TIME: %s.%03ds\n' "$((ELAPSED_MS / 1000))" "$((ELAPSED_MS % 1000))"

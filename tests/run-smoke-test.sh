@@ -1,32 +1,28 @@
 #!/bin/sh
 
+# run-smoke-test.sh - Run the smoke test suite for dndistress.
+
 set -eu
 
 QUIET=0
 
-usage() {
-    printf 'Usage: %s [q|-q|quiet|--quiet]\n' "${0##*/}"
-}
-
 while [ "$#" -gt 0 ]; do
+
     case "$1" in
         q|-q|quiet|--quiet)
             QUIET=1
             ;;
         h|-h|help|--help)
-
-            usage
-
+            printf 'Usage: %s [q|-q|quiet|--quiet]\n' "${0##*/}"
             exit 0
             ;;
         *)
             printf 'error: unknown option: %s\n' "$1" >&2
-
-            usage >&2
-
+            printf 'Usage: %s [q|-q|quiet|--quiet]\n' "${0##*/}" >&2
             exit 2
             ;;
     esac
+
     shift
 done
 
@@ -38,13 +34,23 @@ if [ ! -f "$SMOKE" ]; then
     exit 2
 fi
 
-printf '%s\n\n' "Running dndistress smoke tests..."
+[ "$QUIET" -eq 1 ] || printf '%s\n\n' "Running dndistress smoke tests..."
 
-if sh "$SMOKE"; then
-    printf '\n%s\n' "✓ all smoke tests passed!"
-    exit 0
+if [ "$QUIET" -eq 1 ]; then
+    if sh "$SMOKE" --quiet; then
+        exit 0
+    else
+        rc=$?
+        printf '\n%s\n' "✗ some smoke tests failed."
+        exit "$rc"
+    fi
 else
-
-    [ "$QUIET" -eq 1 ] || printf '\n%s\n' "error: some smoke tests failed."
-
+    if sh "$SMOKE"; then
+        printf '\n%s\n' "✓ all smoke tests passed!"
+        exit 0
+    else
+        rc=$?
+        printf '\n%s\n' "✗ some smoke tests failed."
+        exit "$rc"
+    fi
 fi
