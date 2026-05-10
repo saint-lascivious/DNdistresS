@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.0"
+VERSION="1.2.1"
 BRANCH="master"
 
 LICENSE="GNU General Public License v3.0 or later"
@@ -1248,11 +1248,11 @@ _dndistress_completion() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local commands="install uninstall show help version"
-    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -R -r -s \
-        -t -T -u -U -v -V --binary --burst --column --custom --directory \
+    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -R -r \
+        -s -t -T -u -U -v -V --binary --burst --column --custom --directory \
         --duration --file --format --help --install --local --location \
         --maximum --output --port --qps --random --remote --seconds --top \
-        --type --uninstall --url --verbosity --show --show-warranty \
+        --type --uninstall --url --verbosity --version --show --show-warranty \
         --show-conditions --deny-any --allow-any --force-maximum"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
@@ -1344,7 +1344,6 @@ _dndistress_completion() {
             return 0
             ;;
         -U|--url)
-            # URL argument, typically not completed
             return 0
             ;;
         -V|--verbosity)
@@ -1929,9 +1928,14 @@ make_tmpdir() {
 RANDOM_RR_POOL="A AAAA CNAME MX NS TXT"
 RANDOM_POOL_COUNT=0
 RAND_STATE=1
+PICKED_QTYPE="$_TYPE"
 
 init_random_rr_pool() {
-    set -- "$RANDOM_RR_POOL"
+    old_ifs=$IFS
+    IFS=' '
+    # shellcheck disable=SC2086
+    set -- $RANDOM_RR_POOL
+    IFS=$old_ifs
     RANDOM_POOL_COUNT=$#
 
     [ "$RANDOM_POOL_COUNT" -gt 0 ] || RANDOM_POOL_COUNT=1
@@ -1953,7 +1957,7 @@ init_random_rr_pool() {
 pick_query_type() {
 
     if [ "${_RANDOM:-0}" -ne 1 ]; then
-        printf '%s\n' "$_TYPE"
+        PICKED_QTYPE="$_TYPE"
         return 0
     fi
 
@@ -1966,19 +1970,22 @@ pick_query_type() {
     for t in $RANDOM_RR_POOL; do
 
         if [ "$i" -eq "$idx" ]; then
-            printf '%s\n' "$t"
+            PICKED_QTYPE="$t"
             return 0
         fi
 
         i=$((i + 1))
     done
 
-    printf '%s\n' "$_TYPE"
+    PICKED_QTYPE="$_TYPE"
+
 }
 
 query_one() {
     d="$1"
     qtype="${2:-$_TYPE}"
+
+    log 4 "${GREY}query_one: ${L_GREY}$d ${GREY}type=${L_GREY}$qtype${N_C}"
 
     case "$_BINARY" in
         dig)
@@ -2024,28 +2031,66 @@ query_one() {
 }
 
 WORKER_PIDS=""
-QUEUE_FIFO=""
-WRITER_FD_OPEN=0
+WORKER_FIFOS=""
+WORKER_COUNT=0
+WORKER_NEXT=0
+WORKER_STOP_TOKEN="__DNDISTRESS_STOP__"
+
+enqueue_job() {
+    payload="$1"
+    [ "$WORKER_COUNT" -gt 0 ] || return 1
+
+    idx=$(( (WORKER_NEXT % WORKER_COUNT) + 1 ))
+    WORKER_NEXT=$((WORKER_NEXT + 1))
+
+    i=1
+    target_fifo=""
+
+    for f in $WORKER_FIFOS; do
+
+        if [ "$i" -eq "$idx" ]; then
+            target_fifo="$f"
+            break
+        fi
+
+        i=$((i + 1))
+    done
+
+    [ -n "$target_fifo" ] || return 1
+
+    printf '%s\n' "$payload" > "$target_fifo"
+}
 
 start_worker_pool() {
     workers="$1"
-    QUEUE_FIFO="$TMPDIR/queue.fifo"
 
-    rm -f "$QUEUE_FIFO"
+    WORKER_COUNT="$workers"
+    WORKER_NEXT=0
+    WORKER_FIFOS=""
+    WORKER_PIDS=""
 
-    mkfifo "$QUEUE_FIFO" || { log 0 "${BOLD}${RED}failed to create queue fifo: ${L_GREY}$QUEUE_FIFO${N_C}"
-        return 1
-    }
-
-    log 4 "${GREY}start_worker_pool: workers=${L_GREY}$workers ${GREY}fifo=${L_GREY}$QUEUE_FIFO${N_C}"
+    log 4 "${GREY}start_worker_pool: workers=${L_GREY}$workers${N_C}"
 
     i=0
-
     while [ "$i" -lt "$workers" ]; do
-        (
+        fifo="$TMPDIR/queue.$i.fifo"
 
-            while IFS= read -r job; do
+        rm -f "$fifo"
+
+        mkfifo "$fifo" || {
+
+            log 0 "${BOLD}${RED}failed to create worker fifo: ${L_GREY}$fifo${N_C}"
+
+            return 1
+        }
+
+        (
+            while :; do
+                IFS= read -r job < "$fifo" || continue
+
                 [ -n "$job" ] || continue
+
+                [ "$job" = "$WORKER_STOP_TOKEN" ] && break
 
                 case "$job" in
                     *'|'*)
@@ -2059,26 +2104,21 @@ start_worker_pool() {
                 esac
 
                 [ -n "$d" ] || continue
+
                 query_one "$d" "$qtype"
 
-            done < "$QUEUE_FIFO"
+            done
 
         ) &
-        WORKER_PIDS="$WORKER_PIDS $!"
 
-        log 4 "${GREY}start_worker_pool: started worker pid=${L_GREY}$!${N_C}"
+        WORKER_PIDS="$WORKER_PIDS $!"
+        WORKER_FIFOS="$WORKER_FIFOS $fifo"
+
+        log 4 "${GREY}start_worker_pool: started worker pid=${L_GREY}$! ${GREY}fifo=${L_GREY}$fifo${N_C}"
 
         i=$((i + 1))
     done
 
-    exec 4> "$QUEUE_FIFO" || {
-
-        log 0 "${BOLD}${RED}failed to open queue writer fd: ${L_GREY}$QUEUE_FIFO${N_C}"
-
-        return 1
-    }
-
-    WRITER_FD_OPEN=1
     return 0
 }
 
@@ -2365,7 +2405,7 @@ Characters:            %d\n\
 Longest line:          %d\n\
 \n\
 Comments:              %d (excludes shebang + shellcheck directives)\n\
-Shellcheck directives: %d (...and shellcheck is wrong about it)\n\
+Shellcheck directives: %d\n\
 Comment ratio:         %.2f%% (%d/%d regular comments/non-blank lines)\n\
 \n\
 Variables:             %d (unique shell-style variables seen)\n\
@@ -4306,8 +4346,11 @@ EOF
         auto|plain|csv)
             ;;
         *)
+
             log_invalid_enum "_FORMAT" "$_FORMAT" auto plain csv
+
             exit_with_status 2
+
             ;;
     esac
 
@@ -4315,8 +4358,11 @@ EOF
         quiet|answer)
             ;;
         *)
+
             log_invalid_enum "_OUTPUT" "$_OUTPUT" quiet answer
+
             exit_with_status 2
+
             ;;
     esac
 
@@ -4436,10 +4482,15 @@ EOF
         top_filters_disp="${_TOP_FILTERS:-(${L_GREY}none${GREY})}"
 
         log 4 "${GREY}effective config:${N_C}"
+
         log 4 "  ${L_GREY}BINARY=$_BINARY OUTPUT=$_OUTPUT LOCATION=$_LOCATION RESOLVER=$RESOLVER PORT=$_PORT TYPE=$_TYPE RANDOM=$_RANDOM${N_C}"
+
         log 4 "  ${L_GREY}QPS=$_QPS BURST=$_BURST MAXIMUM=$_MAXIMUM DURATION=$_DURATION${N_C}"
+
         log 4 "  ${L_GREY}TOP=$_TOP TOP_FILTERS=$top_filters_disp FORMAT=$_FORMAT COLUMN=$_COLUMN${N_C}"
+
         log 4 "  ${L_GREY}DIRECTORY=$_DIRECTORY CUSTOM=$_CUSTOM${N_C}"
+
     }
 
     log_effective_config
@@ -4455,21 +4506,25 @@ EOF
         mode="${1:-graceful}"
 
         if [ -z "$WORKER_PIDS" ]; then
-
             w="none"
-
         else
             w="$WORKER_PIDS"
         fi
 
         log 4 "${GREY}stop_worker_pool: mode=${L_GREY}$mode ${GREY}workers:${L_GREY}$w${N_C}"
 
-        if [ "$WRITER_FD_OPEN" -eq 1 ]; then
+        if [ "$mode" = "graceful" ]; then
+            i=0
 
-            log 4 "${GREY}stop_worker_pool: closing writer for ${L_GREY}$QUEUE_FIFO${N_C}"
+            for f in $WORKER_FIFOS; do
 
-            exec 4>&-
-            WRITER_FD_OPEN=0
+                if [ "$i" -lt "$WORKER_COUNT" ] && [ -e "$f" ]; then
+                    printf '%s\n' "$WORKER_STOP_TOKEN" > "$f" 2>/dev/null || true
+                fi
+
+                i=$((i + 1))
+            done
+
         fi
 
         if [ "$mode" = "force" ]; then
@@ -4499,21 +4554,17 @@ EOF
 
         WORKER_PIDS=""
 
-        if [ -n "$QUEUE_FIFO" ]; then
-            if [ -e "$QUEUE_FIFO" ]; then
+        for f in $WORKER_FIFOS; do
 
-                log 4 "${GREY}stop_worker_pool: removing queue fifo ${L_GREY}$QUEUE_FIFO${N_C}"
+            [ -e "$f" ] && log 4 "${GREY}stop_worker_pool: removing worker fifo ${L_GREY}$f${N_C}"
 
-            else
+            rm -f "$f" 2>/dev/null || true
 
-                log 4 "${GREY}stop_worker_pool: queue fifo already absent ${L_GREY}$QUEUE_FIFO${N_C}"
+        done
 
-            fi
-
-            rm -f "$QUEUE_FIFO" 2>/dev/null || true
-
-            QUEUE_FIFO=""
-        fi
+        WORKER_FIFOS=""
+        WORKER_COUNT=0
+        WORKER_NEXT=0
     }
 
     cleanup_all() {
@@ -4900,6 +4951,7 @@ EOF
     MTOKENS="$MBUCKET"
     LAST_TS="$(now_ms)"
     START_TS="$LAST_TS"
+    LAST_SENT_MS="$START_TS"
     DEBUG_TICK_MS="$START_TS"
 
     open_domains() {
@@ -4958,9 +5010,13 @@ EOF
 
                 sleep 0.02
 
-            else
+            elif [ "$deficit_ms" -le 50 ]; then
 
                 sleep 0.05
+
+            else
+
+                sleep 0.1
 
             fi
 
@@ -4969,7 +5025,6 @@ EOF
             sleep 1
 
         fi
-
     }
 
     start_worker_pool "$_MAXIMUM" || exit 1
@@ -4983,11 +5038,16 @@ EOF
         log 3 "${BLUE}random RR mode enabled with pool: ${L_GREY}$RANDOM_RR_POOL${N_C}"
     fi
 
+    DURATION_MS=$((_DURATION * 1000))
+
     while :; do
         now_s="$(now_ms)"
-        elapsed_total=$(( (now_s - START_TS) / 1000 ))
+        elapsed_ms=$((now_s - START_TS))
 
-        if [ "$_DURATION" -gt 0 ] && [ "$elapsed_total" -ge "$_DURATION" ]; then
+        if [ "$_DURATION" -gt 0 ] && [ "$elapsed_ms" -ge "$DURATION_MS" ]; then
+
+            log 4 "${GREY}duration limit reached: ${L_GREY}${elapsed_ms}ms ${GREY}>= ${L_GREY}${DURATION_MS}ms${N_C}"
+
             break
         fi
 
@@ -5001,67 +5061,60 @@ EOF
             LAST_TS="$now_s"
         fi
 
-        tokq=$((MTOKENS / 1000))
-        budget="$tokq"
-
         if [ $((now_s - DEBUG_TICK_MS)) -ge 1000 ]; then
 
-            log 4 "${GREY}loop: elapsed_s=${L_GREY}$elapsed_total ${GREY}sent=${L_GREY}$SENT ${GREY}mtokens=${L_GREY}$MTOKENS ${GREY}budget=${L_GREY}$budget${N_C}"
+            log 4 "${GREY}loop: elapsed_ms=${L_GREY}$elapsed_ms ${GREY}sent=${L_GREY}$SENT ${GREY}mtokens=${L_GREY}$MTOKENS${N_C}"
 
             DEBUG_TICK_MS="$now_s"
         fi
 
-        if [ "$budget" -le 0 ]; then
+        if [ "$MTOKENS" -lt 1000 ]; then
             deficit=$((1000 - MTOKENS))
 
             [ "$deficit" -lt 1 ] && deficit=1
 
-            wait_ms=$(((deficit * 1000 + _QPS - 1) / _QPS))
+            wait_ms=$(((deficit + _QPS - 1) / _QPS))
+
+            [ "$wait_ms" -lt 1 ] && wait_ms=1
 
             nap_for_tokens "$wait_ms"
 
             continue
         fi
 
-        i=0
+        next_domain || break
 
-        while [ "$i" -lt "$budget" ]; do
+        d="$CUR"
 
-            next_domain || break
+        [ -n "$d" ] || continue
 
-            d="$CUR"
+        pick_query_type
 
-            [ -n "$d" ] || continue
+        qtype="$PICKED_QTYPE"
 
-            qtype="$(pick_query_type)"
+        if [ "$QUERIES_START" -eq 0 ]; then
+            QUERIES_START="$(now_ms)"
+        fi
 
-            if [ "$QUERIES_START" -eq 0 ]; then
-                QUERIES_START="$(now_ms)"
-            fi
+        if ! enqueue_job "${qtype}|$d"; then
 
-            if ! printf '%s\n' "${qtype}|$d" >&4; then
-
-                log 0 "${BOLD}${RED}worker queue write failed for domain: ${L_GREY}$d${N_C}"
-
-                break 2
-            fi
-
-            SENT=$((SENT + 1))
-            LAST_SENT_MS="$(now_ms)"
-            MTOKENS=$((MTOKENS - 1000))
-            i=$((i + 1))
-        done
-
-        if [ "$_DURATION" -gt 0 ] && [ "$DOMAINS_EOF" -eq 1 ]; then
-
-            log 3 "${BLUE}domain list exhausted in finite mode${N_C}"
-
-            log 4 "${GREY}ending query loop${N_C}"
+            log 0 "${BOLD}${RED}worker queue write failed for domain: ${L_GREY}$d${N_C}"
 
             break
         fi
 
+        SENT=$((SENT + 1))
+        LAST_SENT_MS="$(now_ms)"
+        MTOKENS=$((MTOKENS - 1000))
     done
+
+    if [ "$DOMAINS_EOF" -eq 1 ]; then
+
+        log 3 "${BLUE}domain list exhausted${N_C}"
+
+        log 4 "${GREY}ending query loop${N_C}"
+
+    fi
 
     exec 3<&-
 
@@ -5077,5 +5130,7 @@ EOF
 }
 
 if [ "${DNDISTRESS_TEST_MODE:-0}" != "1" ]; then
+
     do_dndistress "$@"
+
 fi

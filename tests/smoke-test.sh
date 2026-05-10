@@ -335,11 +335,27 @@ if has_lib_func pick_query_type; then
     assert_ok_cmd "pick_query_type function exists" \
         run_in_lib pick_query_type >/dev/null
 
-    picked="$(run_in_lib eval '_RANDOM=0; _TYPE=A; pick_query_type')"
+    # shellcheck disable=SC2016
+    picked="$(run_in_lib eval '_RANDOM=0; _TYPE=A; pick_query_type; printf "%s\n" "$PICKED_QTYPE"')"
+  
     assert_eq "pick_query_type with _RANDOM=0 returns _TYPE" "$picked" "A"
 
-    picked="$(run_in_lib eval '_RANDOM=1; init_random_rr_pool; pick_query_type')"
-    assert_contains "pick_query_type with _RANDOM=1 returns from pool" "$picked" "A"
+    # shellcheck disable=SC2016
+    picked="$(run_in_lib eval '_RANDOM=1; _TYPE=A; init_random_rr_pool; pick_query_type; printf "%s\n" "$PICKED_QTYPE"')"
+  
+    case "$picked" in
+        A|AAAA|CNAME|MX|NS|TXT)
+  
+            ok "pick_query_type with _RANDOM=1 returns from pool"
+  
+            ;;
+        *)
+  
+            not_ok "pick_query_type with _RANDOM=1 returns from pool"
+  
+            printf '  got unexpected RR type: [%s]\n' "$picked"
+            ;;
+    esac
 
 fi
 
