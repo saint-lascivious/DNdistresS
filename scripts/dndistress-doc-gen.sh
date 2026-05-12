@@ -232,7 +232,11 @@ capture_smoke_output() {
         printf '%s\n' "warning: smoke tests failed during doc generation (exit $status)" >&2
     fi
 
-    printf '%s\n' "$output" | sed 's/^TIME: .*/TIME: 0.xxxs/'
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output"
+    else
+        printf '%s\n' "(no smoke test output captured)"
+    fi
 }
 
 TOPICS_NL="$(discover_topics || true)"
@@ -355,7 +359,7 @@ EOF
     License: $DOC_LICENSE
     Version: $DOC_VERSION
 
-    DNdistresS Copyright (C) $DOC_COPYRIGHT_YEAR $DOC_AUTHOR
+    DNdistresS Copyright $DOC_COPYRIGHT_YEAR $DOC_AUTHOR
 
     This program comes with ABSOLUTELY NO WARRANTY; for details type 'show w'.
     This is free software, and you are welcome to redistribute it
