@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.1"
+VERSION="1.2.2"
 BRANCH="master"
 
 LICENSE="GNU General Public License v3.0 or later"
@@ -73,8 +73,34 @@ need_cmd() {
 }
 
 _BINARY="${_BINARY:-auto}"
+_TYPE="${_TYPE:-A}"
+_RANDOM="${_RANDOM:-0}"
+_DENY_ANY="${_DENY_ANY:-1}"
+
+_QPS="${_QPS:-50}"
 _BURST="${_BURST:-32}"
+_BURST_EFFECTIVE="${_BURST_EFFECTIVE:-$_BURST}"
+_FORCE_BURST="${_FORCE_BURST:-0}"
+
+_MAXIMUM="${_MAXIMUM:-24}"
+_FORCE_MAXIMUM="${_FORCE_MAXIMUM:-0}"
+
+_DURATION="${_DURATION:-60}"
+_VERBOSITY="${_VERBOSITY:-1}"
+_OUTPUT="${_OUTPUT:-quiet}"
+
+_LOCATION="${_LOCATION:-local}"
+_LOCAL="${_LOCAL:-127.0.0.1}"
+_REMOTE="${_REMOTE:-}"
+_PORT="${_PORT:-53}"
+
+_FILE="${_FILE:-}"
+_URL="${_URL:-https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip}"
+_FORMAT="${_FORMAT:-auto}"
 _COLUMN="${_COLUMN:-0}"
+_TOP="${_TOP:-10000}"
+_TOP_FILTERS="${_TOP_FILTERS:-}"
+_SECONDS="${_SECONDS:-86400}"
 
 if [ "$(id -u)" -eq 0 ]; then
     _DIRECTORY="${_DIRECTORY:-/var/cache/dndistress}"
@@ -83,34 +109,19 @@ else
 fi
 
 _CUSTOM="${_CUSTOM:-${_DIRECTORY}/custom.txt}"
-_DURATION="${_DURATION:-300}"
-_FILE="${_FILE:-}"
-_FORMAT="${_FORMAT:-auto}"
 _INSTALL="${_INSTALL:-/usr/local/bin}"
-_LOCAL="${_LOCAL:-127.0.0.1}"
-_LOCATION="${_LOCATION:-local}"
-_MAXIMUM="${_MAXIMUM:-24}"
-_OUTPUT="${_OUTPUT:-quiet}"
-_PORT="${_PORT:-53}"
-_QPS="${_QPS:-50}"
-_RANDOM="${_RANDOM:-0}"
-_REMOTE="${_REMOTE:-}"
-_SECONDS="${_SECONDS:-86400}"
-_TOP="${_TOP:-10000}"
-_TOP_FILTERS="${_TOP_FILTERS:-}"
-_TYPE="${_TYPE:-A}"
 _UNINSTALL="${_UNINSTALL:-/usr/local/bin}"
-_URL="${_URL:-https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip}"
-_VERBOSITY="${_VERBOSITY:-1}"
-_DENY_ANY="${_DENY_ANY:-1}"
 
 SERVICE_DIR="${SERVICE_DIR:-/etc/systemd/system}"
-UNIT_BASE="dndistress"
-DEFAULT_ROOT_DIRECTORY="/var/cache/dndistress"
-DEFAULT_STATE_ROOT="/var/lib/dndistress"
-DEFAULT_RUNTIME_ROOT="/run/dndistress"
-STATUS_BASENAME="dndistress-status.json"
-LOCK_BASENAME="dndistress-status.lock"
+UNIT_BASE="${UNIT_BASE:-dndistress}"
+DEFAULT_ROOT_DIRECTORY="${DEFAULT_ROOT_DIRECTORY:-/var/cache/dndistress}"
+DEFAULT_STATE_ROOT="${DEFAULT_STATE_ROOT:-/var/lib/dndistress}"
+DEFAULT_RUNTIME_ROOT="${DEFAULT_RUNTIME_ROOT:-/run/dndistress}"
+STATUS_BASENAME="${STATUS_BASENAME:-dndistress-status.json}"
+LOCK_BASENAME="${LOCK_BASENAME:-dndistress-status.lock}"
+
+BURST_TRIGGERED="${BURST_TRIGGERED:-0}"
+PEAK_CONCURRENT_WORKERS="${PEAK_CONCURRENT_WORKERS:-0}"
 
 SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
     [-D _DURATION] [-f _FILE] [-F _FORMAT] [-h] [-i _INSTALL] [-l _LOCAL]
@@ -225,6 +236,11 @@ log() {
             pfx="${L_GREY}[${GREY}•${L_GREY}]${N_C}"
             pri="user.debug"
             ;;
+        5|trace|TRACE)
+            n=5
+            pfx="${L_GREY}[${GREY}…${L_GREY}]${N_C}"
+            pri="user.debug"
+            ;;
         *)
             n=3
             pfx="${L_GREY}[${BLUE}?${L_GREY}]${N_C}"
@@ -234,7 +250,7 @@ log() {
     esac
 
     case "${_VERBOSITY:-0}" in
-        0|1|2|3|4)
+        0|1|2|3|4|5)
             v="${_VERBOSITY}"
             ;;
         *)
@@ -408,11 +424,18 @@ exit_with_status() {
     "blocked": $BLOCKED,
     "blocked_pct": $BLOCK_PCT,
     "nxdomain": $NXDOMAIN,
-    "nxdomain_pct": $NXDOMAIN_PCT
+    "nxdomain_pct": $NXDOMAIN_PCT,
+    "burst_ceiling": $_BURST,
+    "burst_effective": $_BURST_EFFECTIVE,
+    "max_workers_temporary": $PEAK_CONCURRENT_WORKERS,
+    "bursts_triggered": $BURST_TRIGGERED,
+    "peak_concurrent_workers": $PEAK_CONCURRENT_WORKERS
   },
   "config": {
     "binary": "$(printf '%s' "$_BINARY" | sed 's/"/\\"/g')",
     "burst": $_BURST,
+    "burst_effective": $_BURST_EFFECTIVE,
+    "force_burst": $_FORCE_BURST,
     "column": $_COLUMN,
     "custom": "$(printf '%s' "$_CUSTOM" | sed 's/"/\\"/g')",
     "directory": "$(printf '%s' "$_DIRECTORY" | sed 's/"/\\"/g')",
@@ -968,7 +991,7 @@ parse_dns_opt() {
     PARSED_DNS_HOST="$host"
     PARSED_DNS_PORT="$prt"
 
-    log 4 "${GREY}parse_dns_opt: parsed host='${L_GREY}${host}${GREY}' port='${L_GREY}${prt}${GREY}' from arg='${L_GREY}${arg}${GREY}'${N_C}"
+    log 5 "${GREY}parse_dns_opt: parsed host='${L_GREY}${host}${GREY}' port='${L_GREY}${prt}${GREY}' from arg='${L_GREY}${arg}${GREY}'${N_C}"
 
     return 0
 }
@@ -1051,10 +1074,10 @@ format_runtime_ms() {
 }
 
 case "$_VERBOSITY" in
-    0|1|2|3|4)
+    0|1|2|3|4|5)
         ;;
     *)
-        verbosity_opts="${L_GREY}0${RED}|${L_GREY}1${RED}|${L_GREY}2${RED}|${L_GREY}3${RED}|${L_GREY}4${RED}"
+        verbosity_opts="${L_GREY}0${RED}|${L_GREY}1${RED}|${L_GREY}2${RED}|${L_GREY}3${RED}|${L_GREY}4${RED}|${L_GREY}5${RED}"
 
         log 1 "${RED}_VERBOSITY must be one (${L_GREY}1${RED}) of ${verbosity_opts}${RED}, got: ${L_GREY}$_VERBOSITY${N_C}"
 
@@ -1248,12 +1271,12 @@ _dndistress_completion() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local commands="install uninstall show help version"
-    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -R -r \
-        -s -t -T -u -U -v -V --binary --burst --column --custom --directory \
-        --duration --file --format --help --install --local --location \
-        --maximum --output --port --qps --random --remote --seconds --top \
-        --type --uninstall --url --verbosity --version --show --show-warranty \
-        --show-conditions --deny-any --allow-any --force-maximum"
+    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -r -R \
+        -s -t -T -u -U -v -V --allow-any --binary --burst --column --custom \
+        --deny-any --directory --duration --file --force-burst --force-maximum \
+        --format --help --install --local --location --maximum --output --port \
+        --qps --random --remote --seconds --show --show-conditions \
+        --show-warranty --top --type --uninstall --url --verbosity --version"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands $global_opts" -- "$cur") )
@@ -1347,7 +1370,7 @@ _dndistress_completion() {
             return 0
             ;;
         -V|--verbosity)
-            COMPREPLY=( $(compgen -W "0 1 2 3 4" -- "$cur") )
+            COMPREPLY=( $(compgen -W "0 1 2 3 4 5" -- "$cur") )
             return 0
             ;;
         -S|--show|show)
@@ -1500,7 +1523,7 @@ download_file() {
 
     if need_cmd curl; then
 
-        log 4 "${GREY}downloading using curl: ${L_GREY}$src ${GREY}-> ${L_GREY}$dst${N_C}"
+        log 5 "${GREY}downloading using curl: ${L_GREY}$src ${GREY}-> ${L_GREY}$dst${N_C}"
 
         curl -fsSL "$src" -o "$dst" || {
 
@@ -1557,7 +1580,7 @@ extract_zip_to_file() {
 cache_key() {
     key="$(printf '%s\n' "$1" | cksum | awk '{ print $1 }')"
 
-    log 4 "${GREY}cache_key: input=${L_GREY}$1 ${GREY}key=${L_GREY}$key${N_C}"
+    log 5 "${GREY}cache_key: input=${L_GREY}$1 ${GREY}key=${L_GREY}$key${N_C}"
 
     printf '%s\n' "$key"
 }
@@ -1630,7 +1653,7 @@ fetch_source() {
     cache_stamp="$_DIRECTORY/$key.stamp"
     now="$(( $(now_ms) / 1000 ))"
 
-    log 4 "${GREY}fetch_source: key=${L_GREY}$key ${GREY}cache_raw=${L_GREY}$cache_raw ${GREY}cache_stamp=${L_GREY}$cache_stamp ${GREY}now=${L_GREY}$now${N_C}"
+    log 5 "${GREY}fetch_source: key=${L_GREY}$key ${GREY}cache_raw=${L_GREY}$cache_raw ${GREY}cache_stamp=${L_GREY}$cache_stamp ${GREY}now=${L_GREY}$now${N_C}"
 
     if [ -f "$cache_raw" ] && [ -f "$cache_stamp" ]; then
         cached_at="$(cat "$cache_stamp" 2>/dev/null || printf '0')"
@@ -1643,23 +1666,23 @@ fetch_source() {
 
         CACHE_AGE=$((now - cached_at))
 
-        log 4 "${GREY}fetch_source: cache candidate age=${L_GREY}$CACHE_AGE ${GREY}ttl=${L_GREY}$_SECONDS${N_C}"
+        log 5 "${GREY}fetch_source: cache candidate age=${L_GREY}$CACHE_AGE ${GREY}ttl=${L_GREY}$_SECONDS${N_C}"
 
         if [ "$CACHE_AGE" -lt "$_SECONDS" ]; then
 
-            log 4 "${GREY}fetch_source: cache hit${N_C}"
+            log 5 "${GREY}fetch_source: cache hit${N_C}"
 
             FETCH_SOURCE_PATH="$cache_raw"
             return 0
         fi
 
-        log 4 "${GREY}fetch_source: cache stale${N_C}"
+        log 5 "${GREY}fetch_source: cache stale${N_C}"
 
     fi
 
     log 3 "${BLUE}Downloading: ${L_GREY}$_URL${N_C}"
 
-    log 4 "${GREY}fetch_source: downloading to temp before promoting to cache${N_C}"
+    log 5 "${GREY}fetch_source: downloading to temp before promoting to cache${N_C}"
 
     cache_tmp="${cache_raw}.tmp.$$"
     FETCH_CACHE_TMP="$cache_tmp"
@@ -1685,7 +1708,7 @@ fetch_source() {
                 return 1
             }
 
-            log 4 "${GREY}fetch_source: zip integrity okay${N_C}"
+            log 5 "${GREY}fetch_source: zip integrity okay${N_C}"
 
             ;;
     esac
@@ -1985,7 +2008,7 @@ query_one() {
     d="$1"
     qtype="${2:-$_TYPE}"
 
-    log 4 "${GREY}query_one: ${L_GREY}$d ${GREY}type=${L_GREY}$qtype${N_C}"
+    log 5 "${GREY}query_one: ${L_GREY}$d ${GREY}type=${L_GREY}$qtype${N_C}"
 
     case "$_BINARY" in
         dig)
@@ -2069,7 +2092,7 @@ start_worker_pool() {
     WORKER_FIFOS=""
     WORKER_PIDS=""
 
-    log 4 "${GREY}start_worker_pool: workers=${L_GREY}$workers${N_C}"
+    log 5 "${GREY}start_worker_pool: workers=${L_GREY}$workers${N_C}"
 
     i=0
     while [ "$i" -lt "$workers" ]; do
@@ -2114,7 +2137,7 @@ start_worker_pool() {
         WORKER_PIDS="$WORKER_PIDS $!"
         WORKER_FIFOS="$WORKER_FIFOS $fifo"
 
-        log 4 "${GREY}start_worker_pool: started worker pid=${L_GREY}$! ${GREY}fifo=${L_GREY}$fifo${N_C}"
+        log 5 "${GREY}start_worker_pool: started worker pid=${L_GREY}$! ${GREY}fifo=${L_GREY}$fifo${N_C}"
 
         i=$((i + 1))
     done
@@ -2710,12 +2733,19 @@ EOF
             file_disp="${_FILE:-"(empty)"}"
             remote_disp="${_REMOTE:-"(empty; falls back to _LOCAL)"}"
             top_filters_disp="${_TOP_FILTERS:-"(empty)"}"
+            force_maximum_disp="${_FORCE_MAXIMUM:-0}"
+            force_burst_disp="${_FORCE_BURST:-0}"
+            burst_effective_disp="${_BURST_EFFECTIVE:-32}"
 
             cat <<EOF
 Topic: environment
 
+  Configuration Variables:
+
   _BINARY      (-b, --binary)           $_BINARY
   _BURST       (-B, --burst)            $_BURST
+  _BURST_EFFECTIVE                      $burst_effective_disp
+  _FORCE_BURST                          $force_burst_disp
   _COLUMN      (-c, --column)           $_COLUMN
   _CUSTOM      (-C, --custom)           $_CUSTOM
   _DIRECTORY   (-d, --directory)        $_DIRECTORY
@@ -2726,6 +2756,7 @@ Topic: environment
   _LOCAL       (-l, --local)            $_LOCAL
   _LOCATION    (-L, --location)         $_LOCATION
   _MAXIMUM     (-m, --maximum)          $_MAXIMUM
+  _FORCE_MAXIMUM                        $force_maximum_disp
   _OUTPUT      (-o, --output)           $_OUTPUT
   _PORT        (-p, --port)             $_PORT
   _QPS         (-q, --qps)              $_QPS
@@ -2740,15 +2771,26 @@ Topic: environment
   _VERBOSITY   (-V, --verbosity)        $_VERBOSITY
   _DENY_ANY    (--deny-any/--allow-any) $_DENY_ANY
 
+  Runtime/System Variables:
+
   USE_LOGGER                            ${USE_LOGGER:-0}
   TMPDIR                                ${TMPDIR:-/tmp}
   _TIMER_PERIOD                         ${_TIMER_PERIOD:-"(auto-detect)"}
+
+  Status Reporting Variables:
 
   _STATUS_ENABLED                       $_STATUS_ENABLED
   _STATUS_DIR                           $_STATUS_DIR
   _STATUS_FILE                          $_STATUS_FILE
   _LOCK_DIR                             $_LOCK_DIR
   _LOCK_FILE                            $_LOCK_FILE
+
+  Metrics/Tracking Variables:
+
+  BURST_TRIGGERED                       ${BURST_TRIGGERED:-0}
+  PEAK_CONCURRENT_WORKERS               ${PEAK_CONCURRENT_WORKERS:-0}
+
+  Service/Unit Configuration:
 
   SERVICE_DIR                           $SERVICE_DIR
   UNIT_BASE                             $UNIT_BASE
@@ -2897,14 +2939,25 @@ EOF
 Topic: burst (-B, --burst)
 
 Meaning:
-  Max burst size for token bucket.
+  Max burst size for token bucket. Bursts allow temporary worker overflow
+  beyond -m/--maximum to simulate traffic spikes.
 
-Default: $_BURST
+Default: 32
 
 Validation: positive integer.
 
+Burst behavior:
+  - Clamped to (_QPS * 2) by default
+  - When tokens available, dispatch up to _BURST queries immediately
+  - May spawn workers exceeding _MAXIMUM (temporary overflow)
+  - Use --force-burst or append '!' to override safety clamp
+
+Runtime clamp applies: _BURST is capped at (_QPS * 2).
+Override with -B N! or --force-burst --burst N.
+
 Note:
-  Runtime clamp applies: _BURST is capped at (_QPS * 2).
+  Burst overflow intentionally creates chaotic traffic patterns suitable
+  for workload simulation and stress testing.
 EOF
 
             ;;
@@ -3290,6 +3343,7 @@ Values:
   2=WARNING
   3=INFO
   4=DEBUG
+  5=TRACE
 
 Default: $_VERBOSITY
 
@@ -3810,8 +3864,22 @@ EOF
 
                 need_optarg "$1" "$@"
 
-                _BURST="$2"
+                case "$2" in
+                    *'!')
+                        _BURST="${2%!}"
+                        _FORCE_BURST=1
+                        ;;
+                    *)
+                        _BURST="$2"
+                        _FORCE_BURST=0
+                        ;;
+                esac
+
                 shift 2
+                ;;
+            --force-burst)
+                _FORCE_BURST=1
+                shift
                 ;;
             -c|c|--column|column)
                 SEEN_NONEXCLUSIVE=1
@@ -4151,7 +4219,7 @@ EOF
         exit 1
     }
 
-    log 4 "${GREY}created temp dir: ${L_GREY}$TMPDIR${N_C}"
+    log 5 "${GREY}created temp dir: ${L_GREY}$TMPDIR${N_C}"
 
     ANSWERS_FILE="$TMPDIR/answers.txt"
 
@@ -4335,11 +4403,22 @@ EOF
 
     max_burst=$((_QPS * 2))
 
-    if [ "$_BURST" -gt "$max_burst" ]; then
+    if [ "$_FORCE_BURST" -eq 0 ]; then
+        _BURST_EFFECTIVE="$max_burst"
 
-        log 2 "${YELLOW}_BURST too high for _QPS (${L_GREY}$_BURST ${YELLOW}> ${L_GREY}$max_burst${YELLOW}), clamping${N_C}"
+        if [ "$_BURST" -gt "$_BURST_EFFECTIVE" ]; then
 
-        _BURST="$max_burst"
+            log 2 "${YELLOW}_BURST too high for _QPS (${L_GREY}$_BURST ${YELLOW}> ${L_GREY}$_BURST_EFFECTIVE${YELLOW}), clamping${N_C}"
+
+            log 3 "${BLUE}to override, use -B <value>! (e.g. -B 256!)${N_C}"
+
+            _BURST="$_BURST_EFFECTIVE"
+        fi
+
+    else
+        _BURST_EFFECTIVE="$_BURST"
+
+        log 3 "${BLUE}burst force override enabled: ${L_GREY}$_BURST ${BLUE}(unclamped)${N_C}"
     fi
 
     case "$_FORMAT" in
@@ -4511,7 +4590,7 @@ EOF
             w="$WORKER_PIDS"
         fi
 
-        log 4 "${GREY}stop_worker_pool: mode=${L_GREY}$mode ${GREY}workers:${L_GREY}$w${N_C}"
+        log 5 "${GREY}stop_worker_pool: mode=${L_GREY}$mode ${GREY}workers:${L_GREY}$w${N_C}"
 
         if [ "$mode" = "graceful" ]; then
             i=0
@@ -4531,14 +4610,14 @@ EOF
 
             for p in $WORKER_PIDS; do
 
-                log 4 "${GREY}stop_worker_pool: sending TERM to pid=${L_GREY}$p${N_C}"
+                log 5 "${GREY}stop_worker_pool: sending TERM to pid=${L_GREY}$p${N_C}"
 
                 kill -TERM "$p" 2>/dev/null || true
             done
 
             for p in $WORKER_PIDS; do
 
-                log 4 "${GREY}stop_worker_pool: sending KILL to pid=${L_GREY}$p${N_C}"
+                log 5 "${GREY}stop_worker_pool: sending KILL to pid=${L_GREY}$p${N_C}"
 
                 kill -KILL "$p" 2>/dev/null || true
             done
@@ -4547,7 +4626,7 @@ EOF
 
         for p in $WORKER_PIDS; do
 
-            log 4 "${GREY}stop_worker_pool: waiting for pid=${L_GREY}$p${N_C}"
+            log 5 "${GREY}stop_worker_pool: waiting for pid=${L_GREY}$p${N_C}"
 
             wait "$p" 2>/dev/null || true
         done
@@ -4556,7 +4635,7 @@ EOF
 
         for f in $WORKER_FIFOS; do
 
-            [ -e "$f" ] && log 4 "${GREY}stop_worker_pool: removing worker fifo ${L_GREY}$f${N_C}"
+            [ -e "$f" ] && log 5 "${GREY}stop_worker_pool: removing worker fifo ${L_GREY}$f${N_C}"
 
             rm -f "$f" 2>/dev/null || true
 
@@ -4579,11 +4658,11 @@ EOF
         if [ "$CLEANED" -eq 0 ]; then
             CLEANED=1
 
-            log 4 "${GREY}cleanup_all: begin mode=${L_GREY}$mode${N_C}"
+            log 5 "${GREY}cleanup_all: begin mode=${L_GREY}$mode${N_C}"
 
             if [ -n "${FETCH_CACHE_TMP:-}" ]; then
 
-                log 4 "${GREY}cleanup_all: removing pending fetch temp ${L_GREY}$FETCH_CACHE_TMP${N_C}"
+                log 5 "${GREY}cleanup_all: removing pending fetch temp ${L_GREY}$FETCH_CACHE_TMP${N_C}"
 
                 rm -f "$FETCH_CACHE_TMP" 2>/dev/null || true
 
@@ -4598,7 +4677,7 @@ EOF
 
                 if [ -d "$TMPDIR" ]; then
 
-                    log 4 "${GREY}cleanup_all: removing temp dir ${L_GREY}$TMPDIR${N_C}"
+                    log 5 "${GREY}cleanup_all: removing temp dir ${L_GREY}$TMPDIR${N_C}"
 
                     rm -fr "$TMPDIR" 2>/dev/null || {
 
@@ -4612,20 +4691,20 @@ EOF
 
                 else
 
-                    log 4 "${GREY}cleanup_all: temp dir already absent ${L_GREY}$TMPDIR${N_C}"
+                    log 5 "${GREY}cleanup_all: temp dir already absent ${L_GREY}$TMPDIR${N_C}"
 
                 fi
 
             fi
 
-            log 4 "${GREY}cleanup_all: complete mode=${L_GREY}$mode${N_C}"
+            log 5 "${GREY}cleanup_all: complete mode=${L_GREY}$mode${N_C}"
 
             print_success
 
             return 0
         fi
 
-        log 4 "${GREY}cleanup_all: already cleaned; skipping (mode=${L_GREY}$mode${GREY})${N_C}"
+        log 5 "${GREY}cleanup_all: already cleaned; skipping (mode=${L_GREY}$mode${GREY})${N_C}"
 
         print_success
 
@@ -4843,7 +4922,7 @@ EOF
         function emit_domain(d) {
             out_count++
 
-            if (dbg) {
+            if (dbg_trace) {
                 printf " %s[%s•%s] %stop domain: %s%s %s(%s%d%s)%s\n", L_GREY, GREY, L_GREY, \
                     GREY, L_GREY, d, GREY, L_GREY, out_count, GREY, \
                     N_C > "/dev/stderr"
@@ -4857,7 +4936,7 @@ EOF
         BEGIN {
             nf = 0
             out_count = 0
-            dbg = ((v + 0) >= 4)
+            dbg_trace = ((v + 0) >= 5)
 
             if (filters != "") {
                 n = split(filters, raw, " ")
@@ -5034,8 +5113,11 @@ EOF
     QUERIES_START=0
 
     if [ "$_RANDOM" -eq 1 ]; then
+
         init_random_rr_pool
+
         log 3 "${BLUE}random RR mode enabled with pool: ${L_GREY}$RANDOM_RR_POOL${N_C}"
+
     fi
 
     DURATION_MS=$((_DURATION * 1000))
@@ -5046,7 +5128,7 @@ EOF
 
         if [ "$_DURATION" -gt 0 ] && [ "$elapsed_ms" -ge "$DURATION_MS" ]; then
 
-            log 4 "${GREY}duration limit reached: ${L_GREY}${elapsed_ms}ms ${GREY}>= ${L_GREY}${DURATION_MS}ms${N_C}"
+            log 5 "${GREY}duration limit reached: ${L_GREY}${elapsed_ms}ms ${GREY}>= ${L_GREY}${DURATION_MS}ms${N_C}"
 
             break
         fi
@@ -5112,7 +5194,7 @@ EOF
 
         log 3 "${BLUE}domain list exhausted${N_C}"
 
-        log 4 "${GREY}ending query loop${N_C}"
+        log 5 "${GREY}ending query loop${N_C}"
 
     fi
 
