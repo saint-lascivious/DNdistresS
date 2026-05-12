@@ -33,32 +33,6 @@ fi
 ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 SCRIPT="$ROOT_DIR/dndistress"
 
-now_epoch_ms() {
-    ms="$(date +%s%3N 2>/dev/null || true)"
-
-    case "$ms" in
-        ''|*[!0-9]*) ;;
-        *) printf '%s\n' "$ms"; return ;;
-    esac
-
-    ns="$(date +%s%N 2>/dev/null || true)"
-
-    case "$ns" in
-        ''|*[!0-9]*) ;;
-        *) printf '%s\n' "$((ns / 1000000))"; return ;;
-    esac
-
-    s="$(date +%s 2>/dev/null || printf '0')"
-
-    case "$s" in
-        ''|*[!0-9]*) s=0 ;;
-    esac
-
-    printf '%s\n' "$((s * 1000))"
-}
-
-START_MS="$(now_epoch_ms)"
-
 pass=0
 fail=0
 
@@ -330,6 +304,16 @@ if has_lib_func is_port; then
 
 fi
 
+if has_lib_func is_absolute_path; then
+
+    assert_fail_cmd "is_absolute_path rejects relative paths" \
+        run_in_lib is_absolute_path "./relative"
+
+    assert_ok_cmd "is_absolute_path accepts absolute paths" \
+        run_in_lib is_absolute_path "/etc/hosts"
+
+fi
+
 if has_lib_func pick_query_type; then
 
     assert_ok_cmd "pick_query_type function exists" \
@@ -366,17 +350,21 @@ if has_lib_func init_random_rr_pool; then
 
 fi
 
-if has_lib_func is_absolute_path; then
+if has_lib_func rr_type_from_id; then
 
-    assert_fail_cmd "is_absolute_path rejects relative paths" \
-        run_in_lib is_absolute_path "./relative"
+    assert_eq "rr_type_from_id maps 1 to A" \
+        "$(run_in_lib rr_type_from_id 1)" "A"
 
-    assert_ok_cmd "is_absolute_path accepts absolute paths" \
-        run_in_lib is_absolute_path "/etc/hosts"
+    assert_eq "rr_type_from_id maps 28 to AAAA" \
+        "$(run_in_lib rr_type_from_id 28)" "AAAA"
+
+    assert_fail_cmd "rr_type_from_id rejects invalid ID" \
+        run_in_lib rr_type_from_id 99999
 
 fi
 
 if has_lib_func parse_top_opt && has_lib_func parse_duration; then
+
     t="$(parse_top_capture 5000)"
     count="$(printf '%s\n' "$t" | sed -n '1p')"
     filters="$(printf '%s\n' "$t" | sed -n '2p')"
@@ -442,19 +430,6 @@ else
 
 fi
 
-if has_lib_func rr_type_from_id; then
-
-    assert_eq "rr_type_from_id maps 1 to A" \
-        "$(run_in_lib rr_type_from_id 1)" "A"
-
-    assert_eq "rr_type_from_id maps 28 to AAAA" \
-        "$(run_in_lib rr_type_from_id 28)" "AAAA"
-
-    assert_fail_cmd "rr_type_from_id rejects invalid ID" \
-        run_in_lib rr_type_from_id 99999
-
-fi
-
 assert_eq "filter no filters returns all" "$(run_filter_count '')" "6"
 
 assert_eq "filter whitespace-only returns all" "$(run_filter_count '   ')" "6"
@@ -485,6 +460,55 @@ else
 
 fi
 
+help_out="$("$SCRIPT" --help general 2>&1)"
+
+assert_contains "help general shows usage" "$help_out" "Usage:"
+
+help_out="$("$SCRIPT" --help qps 2>&1)"
+
+assert_contains "help for qps option works" "$help_out" "queries/sec"
+
+help_out="$("$SCRIPT" --help random 2>&1)"
+
+assert_contains "help for random option works" "$help_out" "RR type randomization"
+
+help_out="$("$SCRIPT" --help burst 2>&1)"
+
+assert_contains "help for burst option works" "$help_out" "token bucket"
+
+assert_contains "help for burst mentions overflow" "$help_out" "overflow"
+
+assert_contains "help for burst mentions clamp" "$help_out" "capped"
+
+assert_contains "help for burst mentions force-burst override" "$help_out" "force-burst"
+
+assert_contains "burst help mentions QPS clamp enforcement" "$help_out" "_QPS * 2"
+
+if has_lib_func parse_burst_opt; then
+
+    assert_ok_cmd "parse_burst_opt accepts positive integer" \
+        run_in_lib parse_burst_opt 32
+
+    assert_fail_cmd "parse_burst_opt rejects zero" \
+        run_in_lib parse_burst_opt 0
+
+    assert_fail_cmd "parse_burst_opt rejects negative" \
+        run_in_lib parse_burst_opt -5
+
+fi
+
+assert_ok_cmd "burst help shows QPS clamp rule" \
+    run_script_quiet --help burst
+
+assert_ok_cmd "burst option -B 50 parses without error" \
+    run_script_quiet -B 50 --help burst
+
+assert_ok_cmd "burst option -B 100! parses with force override" \
+    run_script_quiet -B 100! --help burst
+
+assert_ok_cmd "force-burst flag parses correctly" \
+    run_script_quiet --force-burst --help burst
+
 assert_contains "version output contains branch" \
     "$("$SCRIPT" --version 2>&1)" "master"
 
@@ -500,33 +524,4 @@ conditions_out="$("$SCRIPT" show c 2>&1)"
 
 assert_contains "conditions shows GPL section 4" "$conditions_out" "Conveying Verbatim Copies"
 
-help_out="$("$SCRIPT" --help general 2>&1)"
-
-assert_contains "help general shows usage" "$help_out" "Usage:"
-
-help_out="$("$SCRIPT" --help qps 2>&1)"
-
-assert_contains "help for qps option works" "$help_out" "queries/sec"
-
-help_out="$("$SCRIPT" --help random 2>&1)"
-
-assert_contains "help for random option works" "$help_out" "RR type randomization"
-
-if [ "$fail" -gt 0 ]; then
-    END_MS="$(now_epoch_ms)"
-    ELAPSED_MS="$((END_MS - START_MS))"
-
-    [ "$ELAPSED_MS" -lt 0 ] && ELAPSED_MS=0
-
-    printf '\nFAIL: %s failed, %s passed\n' "$fail" "$pass"
-    printf 'TIME: %s.%03ds\n' "$((ELAPSED_MS / 1000))" "$((ELAPSED_MS % 1000))"
-    exit 1
-fi
-
-END_MS="$(now_epoch_ms)"
-ELAPSED_MS="$((END_MS - START_MS))"
-
-[ "$ELAPSED_MS" -lt 0 ] && ELAPSED_MS=0
-
 printf '\nPASS: %s passed\n' "$pass"
-printf 'TIME: %s.%03ds\n' "$((ELAPSED_MS / 1000))" "$((ELAPSED_MS % 1000))"
