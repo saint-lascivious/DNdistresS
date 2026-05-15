@@ -237,17 +237,21 @@ EOF
 
 filter_count_should_fail() (
     set +e
+
     if run_filter_count "$1" >/dev/null 2>&1; then
         return 1
     fi
+
     return 0
 )
 
 awk_rejects_invalid_dynamic_regex() (
     set +e
+
     if awk 'BEGIN { r="(unclosed"; print ("x" ~ r) }' >/dev/null 2>&1; then
         return 1
     fi
+
     return 0
 )
 
@@ -260,6 +264,34 @@ assert_contains "help topics includes Options header" "$topics_out" "Options:"
 assert_contains "help topics includes deny-any" "$topics_out" "deny-any"
 
 assert_fail_cmd "CLI unknown option fails" run_script_quiet --definitely-not-a-real-option
+
+if has_lib_func init_query_type_tracking; then
+    # shellcheck disable=SC2016
+    tracked="$(run_in_lib eval 'RANDOM_RR_POOL="a mx mx txt bad-type"; init_query_type_tracking; printf "%s\n" "$QTYPE_KEYS"')"
+
+    assert_eq "init_query_type_tracking normalizes/dedupes pool" "$tracked" "A MX TXT"
+
+fi
+
+if has_lib_func bump_query_type_count; then
+    # shellcheck disable=SC2016
+    counted="$(run_in_lib eval '
+        QUERY_TYPE_FILE="${TMPDIR:-/tmp}/dndistress-qtypes.$$"
+        : > "$QUERY_TYPE_FILE"
+        bump_query_type_count a
+        bump_query_type_count mx
+        bump_query_type_count "bad-type"
+        sort "$QUERY_TYPE_FILE"
+        rm -f "$QUERY_TYPE_FILE"
+    ')"
+
+    assert_contains "bump_query_type_count records normalized A" "$counted" "A"
+
+    assert_contains "bump_query_type_count records normalized MX" "$counted" "MX"
+
+    assert_contains "bump_query_type_count records OTHER for invalid type" "$counted" "OTHER"
+
+fi
 
 if has_lib_func is_ipv4_addr; then
 
@@ -343,6 +375,33 @@ if has_lib_func pick_query_type; then
 
 fi
 
+if has_lib_func pick_query_type && has_lib_func init_random_rr_pool; then
+    # shellcheck disable=SC2016
+    picked="$(run_in_lib eval '
+        _RANDOM=1
+        _TYPE=A
+        RANDOM_RR_POOL="MX TXT"
+        init_random_rr_pool
+        pick_query_type
+        printf "%s\n" "$PICKED_QTYPE"
+    ')"
+
+    case "$picked" in
+        MX|TXT)
+
+            ok "pick_query_type respects RANDOM_RR_POOL override"
+
+            ;;
+        *)
+
+            not_ok "pick_query_type respects RANDOM_RR_POOL override"
+
+            printf "  got unexpected RR type: [%s]\n" "$picked"
+            ;;
+    esac
+
+fi
+
 if has_lib_func init_random_rr_pool; then
 
     assert_ok_cmd "init_random_rr_pool initializes pool" \
@@ -360,6 +419,41 @@ if has_lib_func rr_type_from_id; then
 
     assert_fail_cmd "rr_type_from_id rejects invalid ID" \
         run_in_lib rr_type_from_id 99999
+
+fi
+
+if has_lib_func make_tmpdir; then
+
+    tmp_base="${TMPDIR:-/tmp}/dndistress-smoke.$$"
+
+    mkdir -p "$tmp_base"
+
+    made_tmp="$(run_in_lib make_tmpdir "$tmp_base")"
+
+    case "$made_tmp" in
+        "$tmp_base"/*)
+
+            if [ -d "$made_tmp" ]; then
+
+                ok "make_tmpdir creates directory beneath requested base"
+
+            else
+
+                not_ok "make_tmpdir creates directory beneath requested base"
+
+                printf "  returned path is not a directory: [%s]\n" "$made_tmp"
+            fi
+
+            ;;
+        *)
+
+            not_ok "make_tmpdir creates directory beneath requested base"
+
+            printf "  got path outside base: [%s]\n" "$made_tmp"
+            ;;
+    esac
+
+    rm -rf "$made_tmp" "$tmp_base"
 
 fi
 
@@ -460,6 +554,12 @@ else
 
 fi
 
+assert_fail_cmd "--random and --type MX are mutually exclusive" \
+    run_script_quiet --random --type MX
+
+help_out="$("$SCRIPT" --help environment 2>&1)"
+assert_contains "help environment shows RANDOM_RR_POOL" "$help_out" "_RANDOM_RR_POOL"
+
 help_out="$("$SCRIPT" --help general 2>&1)"
 
 assert_contains "help general shows usage" "$help_out" "Usage:"
@@ -471,6 +571,7 @@ assert_contains "help for qps option works" "$help_out" "queries/sec"
 help_out="$("$SCRIPT" --help random 2>&1)"
 
 assert_contains "help for random option works" "$help_out" "RR type randomization"
+assert_contains "help random mentions RR pool" "$help_out" "Pool:"
 
 help_out="$("$SCRIPT" --help burst 2>&1)"
 
