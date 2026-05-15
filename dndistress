@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.2"
+VERSION="1.2.3"
 BRANCH="master"
 
 LICENSE="GNU General Public License v3.0 or later"
@@ -77,15 +77,15 @@ _TYPE="${_TYPE:-A}"
 _RANDOM="${_RANDOM:-0}"
 _DENY_ANY="${_DENY_ANY:-1}"
 
-_QPS="${_QPS:-50}"
-_BURST="${_BURST:-32}"
+_QPS="${_QPS:-48}"
+_BURST="${_BURST:-24}"
 _BURST_EFFECTIVE="${_BURST_EFFECTIVE:-$_BURST}"
 _FORCE_BURST="${_FORCE_BURST:-0}"
 
 _MAXIMUM="${_MAXIMUM:-24}"
 _FORCE_MAXIMUM="${_FORCE_MAXIMUM:-0}"
 
-_DURATION="${_DURATION:-60}"
+_DURATION="${_DURATION:-30}"
 _VERBOSITY="${_VERBOSITY:-1}"
 _OUTPUT="${_OUTPUT:-quiet}"
 
@@ -98,7 +98,7 @@ _FILE="${_FILE:-}"
 _URL="${_URL:-https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip}"
 _FORMAT="${_FORMAT:-auto}"
 _COLUMN="${_COLUMN:-0}"
-_TOP="${_TOP:-10000}"
+_TOP="${_TOP:-2000}"
 _TOP_FILTERS="${_TOP_FILTERS:-}"
 _SECONDS="${_SECONDS:-86400}"
 
@@ -131,17 +131,46 @@ SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
     [-V _VERBOSITY] [--deny-any] [--allow-any]
 '
 
+colourset() {
+
+    if { [ -t 1 ] && [ "$(tput colors)" -ge 8 ]; }; then
+        BLUE='\033[94m'
+        BOLD='\033[1m'
+        CYAN='\033[96m'
+        GREY='\033[90m'
+        GREEN='\033[32m'
+        L_GREY='\033[37m'
+        MAGENTA='\033[95m'
+        N_C='\033[0m'
+        RED='\033[91m'
+        YELLOW='\033[33m'
+    else
+        BLUE=''
+        BOLD=''
+        CYAN=''
+        GREY=''
+        GREEN=''
+        L_GREY=''
+        MAGENTA=''
+        N_C=''
+        RED=''
+        YELLOW=''
+    fi
+
+}
+
+colourset
+
 print_banner() {
 
-    cat <<'EOF'
-           _____   _____       _ _                             _____
-          |  __ \ |  __ \     | (_)       _                   / ____)
-          | |  \ \| |  \ \  __| |_  ___ _| |_  ____ _____  __( (____
-          | |   | | |   | |/ _  | |/___)_   _)/ ___) ___ |/___)____ \
-          | |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )
-          |_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
-
-EOF
+    printf '%b\n' \
+        "${BOLD}${RED}           _____   _____       _ _                             _____${N_C}" \
+        "${BOLD}${YELLOW}          |  __ \ |  __ \     | (_)       _                   / ____)${N_C}" \
+        "${BOLD}${GREEN}          | |  \ \| |  \ \  __| |_  ___ _| |_  ____ _____  __( (____${N_C}" \
+        "${BOLD}${CYAN}          | |   | | |   | |/ _  | |/___)_   _)/ ___) ___ |/___)____ \\\\${N_C}" \
+        "${BOLD}${BLUE}          | |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )${N_C}" \
+        "${BOLD}${MAGENTA}          |_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/${N_C}" \
+        ""
 
 }
 
@@ -174,34 +203,6 @@ USE_LOGGER="${USE_LOGGER:-0}"
 if need_cmd logger; then
     USE_LOGGER=1
 fi
-
-colourset() {
-
-    if { [ -t 1 ] && [ "$(tput colors)" -ge 8 ]; }; then
-        BLUE='\033[94m'
-        BOLD='\033[1m'
-        CYAN='\033[96m'
-        GREY='\033[90m'
-        GREEN='\033[32m'
-        L_GREY='\033[37m'
-        N_C='\033[0m'
-        RED='\033[91m'
-        YELLOW='\033[33m'
-    else
-        BLUE=''
-        BOLD=''
-        CYAN=''
-        GREY=''
-        GREEN=''
-        L_GREY=''
-        N_C=''
-        RED=''
-        YELLOW=''
-    fi
-
-}
-
-colourset
 
 log() {
     lvl="${1:-3}"
@@ -300,7 +301,9 @@ fmt_one_of() {
     out=""
 
     for v in "$@"; do
+
         [ -n "$out" ] && out="${out}${RED}|"
+
         out="${out}${L_GREY}${v}"
     done
 
@@ -335,7 +338,7 @@ compute_runtime_metrics() {
     fi
 
     active_ms=$((last_sent_ms - queries_start))
-    queries_window_ms=$((last_sent_ms - queries_start))
+    queries_window_ms=$((end_ms - queries_start))
     script_window_ms=$((end_ms - SCRIPT_START))
 
     if [ "$active_ms" -gt 0 ]; then
@@ -535,6 +538,7 @@ parse_duration() {
                 } else {
                     ok=0; break
                 }
+
             }
         }
         END {
@@ -1073,18 +1077,51 @@ format_runtime_ms() {
     printf '%dy %dmo %dw %dd %dh %dm %ds%s\n' "$y" "$mo" "$w" "$d" "$h" "$m" "$s" "$frac"
 }
 
-case "$_VERBOSITY" in
-    0|1|2|3|4|5)
-        ;;
-    *)
-        verbosity_opts="${L_GREY}0${RED}|${L_GREY}1${RED}|${L_GREY}2${RED}|${L_GREY}3${RED}|${L_GREY}4${RED}|${L_GREY}5${RED}"
+validate_verbosity() {
 
-        log 1 "${RED}_VERBOSITY must be one (${L_GREY}1${RED}) of ${verbosity_opts}${RED}, got: ${L_GREY}$_VERBOSITY${N_C}"
+    case "$_VERBOSITY" in
+        0|1|2|3|4|5)
+            return 0
+            ;;
+        *)
+            verbosity_opts="${L_GREY}0${RED}|${L_GREY}1${RED}|${L_GREY}2${RED}|${L_GREY}3${RED}|${L_GREY}4${RED}|${L_GREY}5${RED}"
 
-        exit_with_status 2
+            log 1 "${RED}_VERBOSITY must be one (${L_GREY}1${RED}) of ${verbosity_opts}${RED}, got: ${L_GREY}$_VERBOSITY${N_C}"
 
-        ;;
-esac
+            exit_with_status 2
+
+            ;;
+    esac
+
+}
+
+prescan_verbosity() {
+
+    while [ "$#" -gt 0 ]; do
+
+        case "$1" in
+            -V|--verbosity)
+                [ "$#" -ge 2 ] || {
+
+                    log 1 "${RED}missing argument for option: ${L_GREY}$1${N_C}"
+
+                    exit_with_status 2
+
+                }
+
+                _VERBOSITY="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+
+    done
+
+}
+
+validate_verbosity
 
 case "$_RANDOM" in
     0|1)
@@ -1265,25 +1302,60 @@ write_bash_completion() {
 
     cat > "$out" <<'EOF'
 _dndistress_completion() {
-    local cur prev opts cmd_opts
+    local cur prev cmd i
+    local has_random=0
+    local has_type=0
+    local has_mode=0
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local commands="install uninstall show help version"
-    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -r -R \
-        -s -t -T -u -U -v -V --allow-any --binary --burst --column --custom \
-        --deny-any --directory --duration --file --force-burst --force-maximum \
-        --format --help --install --local --location --maximum --output --port \
-        --qps --random --remote --seconds --show --show-conditions \
-        --show-warranty --top --type --uninstall --url --verbosity --version"
+
+    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -r \
+        -R -s -S -t -T -u -U -v -V --allow-any --binary --burst --column \
+        --custom --deny-any --directory --duration --file --force-burst \
+        --force-maximum --format --help --install --local --location \
+        --maximum --output --port --qps --random --remote --seconds --show \
+        --show-conditions --show-warranty --top --type --uninstall --url \
+        --verbosity --version"
+
+    for ((i=1; i<COMP_CWORD; i++)); do
+
+        case "${COMP_WORDS[i]}" in
+            -R|--random)
+                has_random=1
+                ;;
+            -T|--type)
+                has_type=1
+                ;;
+            install|uninstall|show|version)
+                has_mode=1
+                cmd="${COMP_WORDS[i]}"
+                ;;
+        esac
+
+    done
+
+    if [[ $has_random -eq 1 ]]; then
+        global_opts="${global_opts// -T / }"
+        global_opts="${global_opts// --type / }"
+    fi
+
+    if [[ $has_type -eq 1 ]]; then
+        global_opts="${global_opts// -R / }"
+        global_opts="${global_opts// --random / }"
+    fi
+
+    if [[ $has_random -eq 1 && ( "$prev" == "-T" || "$prev" == "--type" ) ]]; then
+        COMPREPLY=()
+        return 0
+    fi
 
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands $global_opts" -- "$cur") )
         return 0
     fi
-
-    local cmd="${COMP_WORDS[1]}"
 
     case "$prev" in
         -b|--binary)
@@ -1291,11 +1363,11 @@ _dndistress_completion() {
             return 0
             ;;
         -B|--burst)
-            COMPREPLY=( $(compgen -W "32 64 128 256 512" -- "$cur") )
+            COMPREPLY=( $(compgen -W "16 32 64 128 256!" -- "$cur") )
             return 0
             ;;
         -c|--column)
-            COMPREPLY=( $(compgen -W "0 1 2 3" -- "$cur") )
+            COMPREPLY=( $(compgen -W "0 1 2 3 4 5" -- "$cur") )
             return 0
             ;;
         -C|--custom)
@@ -1307,7 +1379,7 @@ _dndistress_completion() {
             return 0
             ;;
         -D|--duration)
-            COMPREPLY=( $(compgen -W "300 600 3600 86400" -- "$cur") )
+            COMPREPLY=( $(compgen -W "60 300 600 3600 86400" -- "$cur") )
             return 0
             ;;
         -f|--file)
@@ -1331,7 +1403,7 @@ _dndistress_completion() {
             return 0
             ;;
         -m|--maximum)
-            COMPREPLY=( $(compgen -W "4 8 16 32 64 128 256!" -- "$cur") )
+            COMPREPLY=( $(compgen -W "4 16 32 64 128 256!" -- "$cur") )
             return 0
             ;;
         -o|--output)
@@ -1339,15 +1411,15 @@ _dndistress_completion() {
             return 0
             ;;
         -p|--port)
-            COMPREPLY=( $(compgen -W "53 5353 8853" -- "$cur") )
+            COMPREPLY=( $(compgen -W "53 5335 5353 8853" -- "$cur") )
             return 0
             ;;
         -q|--qps)
-            COMPREPLY=( $(compgen -W "10 50 100 500 1000" -- "$cur") )
+            COMPREPLY=( $(compgen -W "10 20 40 80 160" -- "$cur") )
             return 0
             ;;
         -r|--remote)
-            COMPREPLY=( $(compgen -W "8.8.8.8 1.1.1.1 2606:4700:4700::1111" -- "$cur") )
+            COMPREPLY=( $(compgen -W "1.1.1.1 1.0.0.1 8.8.4.4 8.8.8.8 2001:4860:4860::8888 2606:4700:4700::1111" -- "$cur") )
             return 0
             ;;
         -s|--seconds)
@@ -1355,11 +1427,11 @@ _dndistress_completion() {
             return 0
             ;;
         -t|--top)
-            COMPREPLY=( $(compgen -W "100 1000 5000 10000" -- "$cur") )
+            COMPREPLY=( $(compgen -W "100 1000 5000 10000 50000" -- "$cur") )
             return 0
             ;;
         -T|--type)
-            COMPREPLY=( $(compgen -W "A AAAA MX TXT NS CNAME SOA PTR SRV CAA" -- "$cur") )
+            COMPREPLY=( $(compgen -W "A AAAA CAA CNAME MX NS PTR SOA SRV TXT" -- "$cur") )
             return 0
             ;;
         -u|--uninstall)
@@ -1385,10 +1457,12 @@ _dndistress_completion() {
     fi
 
     if [[ "$cmd" == "install" || "$cmd" == "uninstall" ]]; then
-        if [[ $COMP_CWORD -eq 2 ]]; then
+
+        if [[ "$cur" != -* ]]; then
             _filedir -d
             return 0
         fi
+
     fi
 
     COMPREPLY=( $(compgen -W "$global_opts" -- "$cur") )
@@ -1403,7 +1477,9 @@ EOF
 do_install() {
     target="$1"
 
-    is_valid_target_dir "$target" || { log 1 "${RED}invalid install path: ${L_GREY}$target${N_C}"
+    is_valid_target_dir "$target" || {
+
+        log 1 "${RED}invalid install path: ${L_GREY}$target${N_C}"
 
         exit_with_status 2
 
@@ -1419,7 +1495,9 @@ do_install() {
 
     log 4 "${GREY}ensured install directories exist: ${L_GREY}$target${GREY}, ${L_GREY}$SERVICE_DIR${N_C}"
 
-    src="$(self_source_path)" || { log 1 "${RED}unable to resolve script path for installation${N_C}"
+    src="$(self_source_path)" || {
+
+        log 1 "${RED}unable to resolve script path for installation${N_C}"
 
         exit_with_status 1
 
@@ -1479,7 +1557,9 @@ do_install() {
 do_uninstall() {
     target="$1"
 
-    is_valid_target_dir "$target" || { log 1 "${RED}invalid uninstall path: ${L_GREY}$target${N_C}"
+    is_valid_target_dir "$target" || {
+
+        log 1 "${RED}invalid uninstall path: ${L_GREY}$target${N_C}"
 
         exit_with_status 2
 
@@ -1898,12 +1978,24 @@ choose_tool() {
             ;;
         dig)
 
-            need_cmd dig || { log 1 "${RED}dig not found${N_C}"; return 1; }
+            need_cmd dig || {
+
+                log 1 "${RED}dig not found${N_C}"
+                
+                return 1
+
+            }
 
             ;;
         nslookup)
 
-            need_cmd nslookup || { log 1 "${RED}nslookup not found${N_C}"; return 1; }
+            need_cmd nslookup || {
+
+                log 1 "${RED}nslookup not found${N_C}"
+
+                return 1
+
+            }
 
             ;;
         *)
@@ -1914,7 +2006,7 @@ choose_tool() {
             ;;
     esac
 
-    log 4 "${GREY}choose_tool: using ${L_GREY}$_BINARY ${GREY}for DNS queries${N_C}"
+    log 5 "${GREY}choose_tool: using ${L_GREY}$_BINARY ${GREY}for DNS queries${N_C}"
 
 }
 
@@ -1948,10 +2040,59 @@ make_tmpdir() {
     return 1
 }
 
-RANDOM_RR_POOL="A AAAA CNAME MX NS TXT"
+RANDOM_RR_POOL="${_RANDOM_RR_POOL:-A AAAA CNAME MX NS TXT}"
+
 RANDOM_POOL_COUNT=0
 RAND_STATE=1
 PICKED_QTYPE="$_TYPE"
+
+QTYPE_KEYS=""
+QTYPE_COUNTS=""
+
+init_query_type_tracking() {
+    QTYPE_KEYS=""
+    QTYPE_COUNTS=""
+    seen=" "
+
+    for t in $RANDOM_RR_POOL; do
+        u="$(printf '%s' "$t" | tr '[:lower:]' '[:upper:]')"
+
+        case "$u" in
+            ''|*[!A-Z0-9_]*)
+                continue
+                ;;
+        esac
+
+        case "$seen" in
+            *" $u "*)
+                continue
+            ;;
+        esac
+
+        seen="${seen}${u} "
+        QTYPE_KEYS="${QTYPE_KEYS}${QTYPE_KEYS:+ }${u}"
+
+        if [ -z "$QTYPE_COUNTS" ]; then
+            QTYPE_COUNTS="$(printf '%s %s' "$u" "0")"
+        else
+            QTYPE_COUNTS="$(printf '%s\n%s %s' "$QTYPE_COUNTS" "$u" "0")"
+        fi
+
+    done
+
+}
+
+bump_query_type_count() {
+    t="$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')"
+
+    case "$t" in
+        ''|*[!A-Z0-9_]*)
+            t="OTHER"
+            ;;
+    esac
+
+    printf '%s\n' "$t" >> "$QUERY_TYPE_FILE"
+}
 
 init_random_rr_pool() {
     old_ifs=$IFS
@@ -1990,6 +2131,7 @@ pick_query_type() {
     idx=$(( (RAND_STATE % RANDOM_POOL_COUNT) + 1 ))
 
     i=1
+
     for t in $RANDOM_RR_POOL; do
 
         if [ "$i" -eq "$idx" ]; then
@@ -2008,7 +2150,7 @@ query_one() {
     d="$1"
     qtype="${2:-$_TYPE}"
 
-    log 5 "${GREY}query_one: ${L_GREY}$d ${GREY}type=${L_GREY}$qtype${N_C}"
+    log 4 "${GREY}query_one: ${L_GREY}$d ${GREY}type=${L_GREY}$qtype${N_C}"
 
     case "$_BINARY" in
         dig)
@@ -2017,10 +2159,10 @@ query_one() {
 
                 dig @"$RESOLVER" -p "$_PORT" "$d" "$qtype" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null | \
                     tee -a "$ANSWERS_FILE" | \
-                    awk -v GREY="$GREY" -v N_C="$N_C" 'NF { print "   " GREY "•" N_C " " $0 }'
+                    awk -v GREY="$GREY" -v N_C="$N_C" 'NF { print "   " GREY "•" N_C " " $0 }' || true
             else
 
-                dig @"$RESOLVER" -p "$_PORT" "$d" "$qtype" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null >> "$ANSWERS_FILE"
+                dig @"$RESOLVER" -p "$_PORT" "$d" "$qtype" +short +time=1 +tries=1 +retry=0 +notcp +ignore 2>/dev/null >> "$ANSWERS_FILE" || true
 
             fi
 
@@ -2035,7 +2177,7 @@ query_one() {
                         seen && /^Address: /   { sub(/^Address: /,""); print $0 }
                         seen && /^Addresses: / { sub(/^Addresses: /,""); print $0 }
                     ' | tee -a "$ANSWERS_FILE" | \
-                    awk -v GREY="$GREY" -v N_C="$N_C" 'NF { print "   " GREY "•" N_C " " $0 }'
+                    awk -v GREY="$GREY" -v N_C="$N_C" 'NF { print "   " GREY "•" N_C " " $0 }' || true
 
             else
 
@@ -2044,13 +2186,14 @@ query_one() {
                         /^Name:/ { seen=1; next }
                         seen && /^Address: /   { sub(/^Address: /,""); print $0 }
                         seen && /^Addresses: / { sub(/^Addresses: /,""); print $0 }
-                    ' >> "$ANSWERS_FILE"
+                    ' >> "$ANSWERS_FILE" || true
 
             fi
 
             ;;
     esac
 
+    return 0
 }
 
 WORKER_PIDS=""
@@ -2095,6 +2238,7 @@ start_worker_pool() {
     log 5 "${GREY}start_worker_pool: workers=${L_GREY}$workers${N_C}"
 
     i=0
+
     while [ "$i" -lt "$workers" ]; do
         fifo="$TMPDIR/queue.$i.fifo"
 
@@ -2108,6 +2252,8 @@ start_worker_pool() {
         }
 
         (
+            set +e
+
             while :; do
                 IFS= read -r job < "$fifo" || continue
 
@@ -2128,8 +2274,7 @@ start_worker_pool() {
 
                 [ -n "$d" ] || continue
 
-                query_one "$d" "$qtype"
-
+                query_one "$d" "$qtype" || true
             done
 
         ) &
@@ -2162,28 +2307,48 @@ print_start_notice() {
 
     print_banner >&2
 
-    cat >&2 <<EOF
-    Version: $VERSION $BRANCH
-    Contact: $CONTACT
-    License: $LICENSE
-
-    $NAME $COPYRIGHT_YEAR $AUTHOR_NAME
-
-    This program comes with ABSOLUTELY NO WARRANTY; for details type 'show w'.
-    This is free software, and you are welcome to redistribute it
-    under certain conditions; type 'show c' for details.
-
-EOF
+    printf '%b\n' \
+        "    ${GREY}Version:${N_C}  ${L_GREY}$VERSION $BRANCH${N_C}" \
+        "    ${GREY}Contact:${N_C}  ${L_GREY}$CONTACT${N_C}" \
+        "    ${GREY}License:${N_C}  ${L_GREY}$LICENSE${N_C}" \
+        "" \
+        "    ${L_GREY}$NAME $COPYRIGHT_YEAR $AUTHOR_NAME${N_C}" \
+        "" \
+        "    ${GREY}This program comes with ${BOLD}${RED}ABSOLUTELY NO WARRANTY${N_C}${GREY}; for details type '${L_GREY}show w${GREY}'.${N_C}" \
+        "    ${GREY}This is free software, and you are welcome to redistribute it${N_C}" \
+        "    ${GREY}under certain conditions; type '${L_GREY}show c${GREY}' for details.${N_C}" \
+        "" >&2
 }
 
 _MODE="none"
+SHOW_TOPIC=""
+
+mode_name() {
+    case "$1" in
+        install)
+            printf '%s\n' "install"
+            ;;
+        uninstall)
+            printf '%s\n' "uninstall"
+            ;;
+        show)
+            printf '%s\n' "show"
+            ;;
+        version)
+            printf '%s\n' "version"
+            ;;
+        *)
+            printf '%s\n' "$1"
+            ;;
+    esac
+}
 
 set_mode() {
     _req="$1"
 
     if [ "$_MODE" != "none" ] && [ "$_MODE" != "$_req" ]; then
 
-        log 1 "${L_GREY}install${RED} and ${L_GREY}uninstall${RED} are mutually exclusive${N_C}"
+        log 1 "${RED}${L_GREY}$(mode_name "$_MODE")${RED} and ${L_GREY}$(mode_name "$_req")${RED} are mutually exclusive${N_C}"
 
         exit_with_status 2
 
@@ -2192,10 +2357,27 @@ set_mode() {
     _MODE="$_req"
 }
 
+set_show_topic() {
+    _topic="$1"
+
+    [ -n "$_topic" ] || return 0
+
+    if [ -n "$SHOW_TOPIC" ] && [ "$SHOW_TOPIC" != "$_topic" ]; then
+
+        log 1 "${RED}multiple show topics requested${N_C}"
+
+        exit_with_status 2
+    fi
+
+    SHOW_TOPIC="$_topic"
+}
+
 need_optarg() {
     opt="$1"
 
-    [ "$#" -ge 2 ] || { log 1 "${RED}missing argument for option: ${L_GREY}$opt${N_C}"
+    [ "$#" -ge 2 ] || {
+
+        log 1 "${RED}missing argument for option: ${L_GREY}$opt${N_C}"
 
         exit_with_status 2
 
@@ -2207,26 +2389,25 @@ help_topics() {
 
     [ "$_VERBOSITY" -ge 3 ] && print_banner
 
-    cat <<'EOF'
-Help topics:
-
-  General:
-    general usage topics info description runtime resolver domains status
-    environment
-
-  Commands:
-    install uninstall show version help
-
-  Options:
-    binary burst column custom directory duration file format local location
-    maximum force-maximum output port qps random remote seconds top type
-    deny-any url verbosity
-
-  Aliases accepted:
-    -i/--install, -u/--uninstall, -v/--version, -h/--help, -S/--show,
-    --show-warranty, --show-conditions, --force-maximum,
-    -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-R/-r/-s/-t/-T/-U/-V
-EOF
+    printf '%s\n' \
+        "Help topics:" \
+        "" \
+        "  General:" \
+        "    general usage topics info description runtime resolver domains status" \
+        "    environment" \
+        "" \
+        "  Commands:" \
+        "    install uninstall show version help" \
+        "" \
+        "  Options:" \
+        "    binary burst column custom directory duration file format local location" \
+        "    maximum force-maximum output port qps random remote seconds top type" \
+        "    deny-any url verbosity" \
+        "" \
+        "  Aliases accepted:" \
+        "    -i/--install, -u/--uninstall, -v/--version, -h/--help, -S/--show," \
+        "    --show-warranty, --show-conditions, --force-maximum," \
+        "    -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-R/-r/-s/-t/-T/-U/-V"
 
 }
 
@@ -2236,6 +2417,9 @@ collect_script_metrics() {
     awk '
         BEGIN {
             in_fn=0; fn_depth=0; fn_nesting=0
+            fn_count=0; fn_total=0; fn_max=0
+            cur_fn_len=0; cur_fn_name=""
+            max_fn_name=""
             max_fn_nesting=0; max_brace_depth=0; max_subshell_depth=0
             in_awk=0; awk_block_len=0; max_awk_block=0
         }
@@ -2244,6 +2428,12 @@ collect_script_metrics() {
             t=s; o=gsub(/\{/, "{", t)
             t=s; c=gsub(/\}/, "}", t)
             return (o-c)
+        }
+
+        function fn_name_from_line(s) {
+            sub(/^[[:space:]]*/, "", s)
+            sub(/[[:space:]]*\(\)[[:space:]]*\{[[:space:]]*$/, "", s)
+            return s
         }
 
         {
@@ -2263,23 +2453,28 @@ collect_script_metrics() {
                     in_fn=1
                     fn_count++
                     cur_fn_len=1
+                    cur_fn_name=fn_name_from_line(line)
                     fn_depth=brace_delta(line)
 
                     if (fn_depth <= 0) {
                         fn_total += cur_fn_len
-                        if (cur_fn_len > fn_max) fn_max=cur_fn_len
+                        if (cur_fn_len > fn_max) {
+                            fn_max=cur_fn_len
+                            max_fn_name=cur_fn_name
+                        }
                         in_fn=0; cur_fn_len=0; fn_depth=0
                     }
-
                 }
-
             } else {
                 cur_fn_len++
                 fn_depth += brace_delta(line)
 
                 if (fn_depth <= 0) {
                     fn_total += cur_fn_len
-                    if (cur_fn_len > fn_max) fn_max=cur_fn_len
+                    if (cur_fn_len > fn_max) {
+                        fn_max=cur_fn_len
+                        max_fn_name=cur_fn_name
+                    }
                     in_fn=0; cur_fn_len=0; fn_depth=0
                 }
             }
@@ -2288,6 +2483,7 @@ collect_script_metrics() {
             if (brace_depth > max_brace_depth) max_brace_depth=brace_depth
 
             tmp=line
+
             while (match(tmp, /\$\(|[^$]\(|\)/)) {
                 tok=substr(tmp, RSTART, RLENGTH)
                 if (tok == ")") subshell_depth--
@@ -2414,7 +2610,7 @@ collect_script_metrics() {
 
             printf "\
 Functions:             %d\n\
-Max function LOC:      %d\n\
+Max function LOC:      %d (%s())\n\
 Average function LOC:  %.2f\n\
 Function nesting:      %d (maximum depth)\n\
 Maximum depth:         %d (maximum brace/subshell nesting depth)\n\
@@ -2442,11 +2638,12 @@ Heredocs:              %d (<< usage)\n\
 Sourcing:              %d (. or source)\n\
 Traps:                 %d\n\
 Exits:                 %d\n", \
-fn_count+0, fn_max+0, avg_fn, max_fn_nesting+0, max_depth+0, \
-max_awk_block+0, total+0, nonblank+0, total_loc_ratio, total+0, nonblank+0, \
-blank+0, char_total+0, max_line_len+0, comments+0, directives+0, c_pct, \
-comments+0, nonblank+0, vars+0, ifs+0, case_count+0, avg_arms, loop_count+0, \
-pipes+0, subshells+0, heredocs+0, sourcing+0, traps+0, exits+0
+fn_count+0, fn_max+0, (max_fn_name != "" ? max_fn_name : "unknown"), avg_fn, \
+max_fn_nesting+0, max_depth+0, max_awk_block+0, total+0, nonblank+0, \
+total_loc_ratio, total+0, nonblank+0, blank+0, char_total+0, max_line_len+0, \
+comments+0, directives+0, c_pct, comments+0, nonblank+0, vars+0, ifs+0, \
+case_count+0, avg_arms, loop_count+0, pipes+0, subshells+0, heredocs+0, \
+sourcing+0, traps+0, exits+0
         }
     ' "$0" 2>/dev/null || printf '%s\n' \
         "Functions:             $UNKNOWN_METRIC" \
@@ -2482,8 +2679,6 @@ pipes+0, subshells+0, heredocs+0, sourcing+0, traps+0, exits+0
 
 usage() {
 
-    [ "$_VERBOSITY" -ge 3 ] && print_banner
-
     prog_name="${0##*/}"
 
     awk -v prog="$prog_name" -v syn="$SYNOPSIS" -v cols="${COLUMNS:-80}" '
@@ -2493,6 +2688,7 @@ usage() {
             ind  = sprintf("%" length(head) "s", "")
             line = head
             s    = syn
+
             while (length(s) > 0) {
                 if (substr(s,1,1) != "[") break
                 depth = 0
@@ -2513,6 +2709,7 @@ usage() {
                     line = cand
                 }
             }
+
             print line
             print ""
             print "  " prog " --help [topic]"
@@ -2553,6 +2750,7 @@ parse_top_opt() {
     _t_filters=""
 
     for _t_arg in "$@"; do
+
         case "$_t_arg" in
             /*/)
                 _t_filters="${_t_filters:+$_t_filters }$_t_arg"
@@ -2577,16 +2775,23 @@ parse_top_opt() {
                 ;;
             *)
 
-                [ -z "$_t_count" ] || { log 1 "${RED}multiple count values supplied to ${L_GREY}-t${RED}/${L_GREY}--top${RED}: ${L_GREY}$_t_count and $_t_arg${N_C}"
+                [ -z "$_t_count" ] || {
+
+                    log 1 "${RED}multiple count values supplied to ${L_GREY}-t${RED}/${L_GREY}--top${RED}: ${L_GREY}$_t_count and $_t_arg${N_C}"
+
                     return 1
                 }
 
                 _t_count="$_t_arg"
                 ;;
         esac
+
     done
 
-    [ -n "$_t_count" ] || { log 1 "${L_GREY}-t${RED}/${L_GREY}--top ${RED}requires a positive integer count argument${N_C}"
+    [ -n "$_t_count" ] || {
+
+        log 1 "${L_GREY}-t${RED}/${L_GREY}--top ${RED}requires a positive integer count argument${N_C}"
+
         return 1
     }
 
@@ -2761,6 +2966,7 @@ Topic: environment
   _PORT        (-p, --port)             $_PORT
   _QPS         (-q, --qps)              $_QPS
   _RANDOM      (-R, --random)           $_RANDOM
+  _RANDOM_RR_POOL                       $RANDOM_RR_POOL
   _REMOTE      (-r, --remote)           $remote_disp
   _SECONDS     (-s, --seconds)          $_SECONDS
   _TOP         (-t, --top)              $_TOP
@@ -3544,11 +3750,16 @@ scan_help_request() {
 
 do_dndistress() {
 
+    prescan_verbosity "$@"
+
+    validate_verbosity
+
     scan_help_request "$@"
 
     if [ "$HELP_REQUEST" -eq 1 ]; then
 
-        [ "$HELP_AMBIGUOUS" -eq 0 ] || { log 1 "${RED}ambiguous help request (multiple topics)${N_C}"
+        [ "$HELP_AMBIGUOUS" -eq 0 ] || {
+            log 1 "${RED}ambiguous help request (multiple topics)${N_C}"
 
             exit_with_status 2
 
@@ -3563,191 +3774,189 @@ do_dndistress() {
 
         [ "$_VERBOSITY" -ge 3 ] && print_banner
 
-        cat <<'EOF'
-                             ABSOLUTELY NO WARRANTY
-
-  15. Disclaimer of Warranty.
-
-  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
-APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
-HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY
-OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
-THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
-IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
-ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
-
-  16. Limitation of Liability.
-
-  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
-WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
-THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
-GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
-USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
-DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
-PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
-EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
-SUCH DAMAGES.
-
-EOF
-    }
+        printf '%b\n' \
+            "                             ${BOLD}ABSOLUTELY NO WARRANTY${N_C}" \
+            "" \
+            "  15. Disclaimer of Warranty." \
+            "" \
+            "  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY" \
+            "APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT" \
+            "HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM \"AS IS\" WITHOUT WARRANTY" \
+            "OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO," \
+            "THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR" \
+            "PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM" \
+            "IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF" \
+            "ALL NECESSARY SERVICING, REPAIR OR CORRECTION." \
+            "" \
+            "  16. Limitation of Liability." \
+            "" \
+            "  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING" \
+            "WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS" \
+            "THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY" \
+            "GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE" \
+            "USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF" \
+            "DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD" \
+            "PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS)," \
+            "EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF" \
+            "SUCH DAMAGES." \
+            ""
+        }
 
     show_conditions() {
 
         [ "$_VERBOSITY" -ge 3 ] && print_banner
 
-        cat <<'EOF'
-                              TERMS AND CONDITIONS
-
-  4. Conveying Verbatim Copies.
-
-  You may convey verbatim copies of the Program's source code as you
-receive it, in any medium, provided that you conspicuously and
-appropriately publish on each copy an appropriate copyright notice;
-keep intact all notices stating that this License and any
-non-permissive terms added in accord with section 7 apply to the code;
-keep intact all notices of the absence of any warranty; and give all
-recipients a copy of this License along with the Program.
-
-  You may charge any price or no price for each copy that you convey,
-and you may offer support or warranty protection for a fee.
-
-  5. Conveying Modified Source Versions.
-
-  You may convey a work based on the Program, or the modifications to
-produce it from the Program, in the form of source code under the
-terms of section 4, provided that you also meet all of these conditions:
-
-    a) The work must carry prominent notices stating that you modified
-    it, and giving a relevant date.
-
-    b) The work must carry prominent notices stating that it is
-    released under this License and any conditions added under section
-    7.  This requirement modifies the requirement in section 4 to
-    "keep intact all notices".
-
-    c) You must license the entire work, as a whole, under this
-    License to anyone who comes into possession of a copy.  This
-    License will therefore apply, along with any applicable section 7
-    additional terms, to the whole of the work, and all its parts,
-    regardless of how they are packaged.  This License gives no
-    permission to license the work in any other way, but it does not
-    invalidate such permission if you have separately received it.
-
-    d) If the work has interactive user interfaces, each must display
-    Appropriate Legal Notices; however, if the Program has interactive
-    interfaces that do not display Appropriate Legal Notices, your
-    work need not make them do so.
-
-  A compilation of a covered work with other separate and independent
-works, which are not by their nature extensions of the covered work,
-and which are not combined with it such as to form a larger program,
-in or on a volume of a storage or distribution medium, is called an
-"aggregate" if the compilation and its resulting copyright are not
-used to limit the access or legal rights of the compilation's users
-beyond what the individual works permit.  Inclusion of a covered work
-in an aggregate does not cause this License to apply to the other
-parts of the aggregate.
-
-  6. Conveying Non-Source Forms.
-
-  You may convey a covered work in object code form under the terms
-of sections 4 and 5, provided that you also convey the
-machine-readable Corresponding Source under the terms of this License,
-in one of these ways:
-
-    a) Convey the object code in, or embodied in, a physical product
-    (including a physical distribution medium), accompanied by the
-    Corresponding Source fixed on a durable physical medium
-    customarily used for software interchange.
-
-    b) Convey the object code in, or embodied in, a physical product
-    (including a physical distribution medium), accompanied by a
-    written offer, valid for at least three years and valid for as
-    long as you offer spare parts or customer support for that product
-    model, to give anyone who possesses the object code either (1) a
-    copy of the Corresponding Source for all the software in the
-    product that is covered by this License, on a durable physical
-    medium customarily used for software interchange, for a price no
-    more than your reasonable cost of physically performing this
-    conveying of source, or (2) access to copy the
-    Corresponding Source from a network server at no charge.
-
-    c) Convey individual copies of the object code with a copy of the
-    written offer to provide the Corresponding Source.  This
-    alternative is allowed only occasionally and noncommercially, and
-    only if you received the object code with such an offer, in accord
-    with subsection 6b.
-
-    d) Convey the object code by offering access from a designated
-    place (gratis or for a charge), and offer equivalent access to the
-    Corresponding Source in the same way through the same place at no
-    further charge.  You need not require recipients to copy the
-    Corresponding Source along with the object code.  If the place to
-    copy the object code is a network server, the Corresponding Source
-    may be on a different server (operated by you or a third party)
-    that supports equivalent copying facilities, provided you maintain
-    clear directions next to the object code saying where to find the
-    Corresponding Source.  Regardless of what server hosts the
-    Corresponding Source, you remain obligated to ensure that it is
-    available for as long as needed to satisfy these requirements.
-
-    e) Convey the object code using peer-to-peer transmission, provided
-    you inform other peers where the object code and Corresponding
-    Source of the work are being offered to the general public at no
-    charge under subsection 6d.
-
-  A separable portion of the object code, whose source code is excluded
-from the Corresponding Source as a System Library, need not be
-included in conveying the object code work.
-
-  A "User Product" is either (1) a "consumer product", which means any
-tangible personal property which is normally used for personal, family,
-or household purposes, or (2) anything designed or sold for incorporation
-into a dwelling.  In determining whether a product is a consumer product,
-doubtful cases shall be resolved in favor of coverage.  For a particular
-product received by a particular user, "normally used" refers to a
-typical or common use of that class of product, regardless of the status
-of the particular user or of the way in which the particular user
-actually uses, or expects or is expected to use, the product.  A product
-is a consumer product regardless of whether the product has substantial
-commercial, industrial or non-consumer uses, unless such uses represent
-the only significant mode of use of the product.
-
-  "Installation Information" for a User Product means any methods,
-procedures, authorization keys, or other information required to install
-and execute modified versions of a covered work in that User Product from
-a modified version of its Corresponding Source.  The information must
-suffice to ensure that the continued functioning of the modified object
-code is in no case prevented or interfered with solely because
-modification has been made.
-
-  If you convey an object code work under this section in, or with, or
-specifically for use in, a User Product, and the conveying occurs as
-part of a transaction in which the right of possession and use of the
-User Product is transferred to the recipient in perpetuity or for a
-fixed term (regardless of how the transaction is characterized), the
-Corresponding Source conveyed under this section must be accompanied
-by the Installation Information.  But this requirement does not apply
-if neither you nor any third party retains the ability to install
-modified object code on the User Product (for example, the work has
-been installed in ROM).
-
-  The requirement to provide Installation Information does not include a
-requirement to continue to provide support service, warranty, or updates
-for a work that has been modified or installed by the recipient, or for
-the User Product in which it has been modified or installed.  Access to a
-network may be denied when the modification itself materially and
-adversely affects the operation of the network or violates the rules and
-protocols for communication across the network.
-
-  Corresponding Source conveyed, and Installation Information provided,
-in accord with this section must be in a format that is publicly
-documented (and with an implementation available to the public in
-source code form), and must require no special password or key for
-unpacking, reading or copying.
-
-EOF
+        printf '%b\n' \
+            "                              ${BOLD}TERMS AND CONDITIONS${N_C}" \
+            "" \
+            "  4. Conveying Verbatim Copies." \
+            "" \
+            "  You may convey verbatim copies of the Program's source code as you" \
+            "receive it, in any medium, provided that you conspicuously and" \
+            "appropriately publish on each copy an appropriate copyright notice;" \
+            "keep intact all notices stating that this License and any" \
+            "non-permissive terms added in accord with section 7 apply to the code;" \
+            "keep intact all notices of the absence of any warranty; and give all" \
+            "recipients a copy of this License along with the Program." \
+            "" \
+            "  You may charge any price or no price for each copy that you convey," \
+            "and you may offer support or warranty protection for a fee." \
+            "" \
+            "  5. Conveying Modified Source Versions." \
+            "" \
+            "  You may convey a work based on the Program, or the modifications to" \
+            "produce it from the Program, in the form of source code under the" \
+            "terms of section 4, provided that you also meet all of these conditions:" \
+            "" \
+            "    a) The work must carry prominent notices stating that you modified" \
+            "    it, and giving a relevant date." \
+            "" \
+            "    b) The work must carry prominent notices stating that it is" \
+            "    released under this License and any conditions added under section" \
+            "    7.  This requirement modifies the requirement in section 4 to" \
+            "    \"keep intact all notices\"." \
+            "" \
+            "    c) You must license the entire work, as a whole, under this" \
+            "    License to anyone who comes into possession of a copy.  This" \
+            "    License will therefore apply, along with any applicable section 7" \
+            "    additional terms, to the whole of the work, and all its parts," \
+            "    regardless of how they are packaged.  This License gives no" \
+            "    permission to license the work in any other way, but it does not" \
+            "    invalidate such permission if you have separately received it." \
+            "" \
+            "    d) If the work has interactive user interfaces, each must display" \
+            "    Appropriate Legal Notices; however, if the Program has interactive" \
+            "    interfaces that do not display Appropriate Legal Notices, your" \
+            "    work need not make them do so." \
+            "" \
+            "  A compilation of a covered work with other separate and independent" \
+            "works, which are not by their nature extensions of the covered work," \
+            "and which are not combined with it such as to form a larger program," \
+            "in or on a volume of a storage or distribution medium, is called an" \
+            "\"aggregate\" if the compilation and its resulting copyright are not" \
+            "used to limit the access or legal rights of the compilation's users" \
+            "beyond what the individual works permit.  Inclusion of a covered work" \
+            "in an aggregate does not cause this License to apply to the other" \
+            "parts of the aggregate." \
+            "" \
+            "  6. Conveying Non-Source Forms." \
+            "" \
+            "  You may convey a covered work in object code form under the terms" \
+            "of sections 4 and 5, provided that you also convey the" \
+            "machine-readable Corresponding Source under the terms of this License," \
+            "in one of these ways:" \
+            "" \
+            "    a) Convey the object code in, or embodied in, a physical product" \
+            "    (including a physical distribution medium), accompanied by the" \
+            "    Corresponding Source fixed on a durable physical medium" \
+            "    customarily used for software interchange." \
+            "" \
+            "    b) Convey the object code in, or embodied in, a physical product" \
+            "    (including a physical distribution medium), accompanied by a" \
+            "    written offer, valid for at least three years and valid for as" \
+            "    long as you offer spare parts or customer support for that product" \
+            "    model, to give anyone who possesses the object code either (1) a" \
+            "    copy of the Corresponding Source for all the software in the" \
+            "    product that is covered by this License, on a durable physical" \
+            "    medium customarily used for software interchange, for a price no" \
+            "    more than your reasonable cost of physically performing this" \
+            "    conveying of source, or (2) access to copy the" \
+            "    Corresponding Source from a network server at no charge." \
+            "" \
+            "    c) Convey individual copies of the object code with a copy of the" \
+            "    written offer to provide the Corresponding Source.  This" \
+            "    alternative is allowed only occasionally and noncommercially, and" \
+            "    only if you received the object code with such an offer, in accord" \
+            "    with subsection 6b." \
+            "" \
+            "    d) Convey the object code by offering access from a designated" \
+            "    place (gratis or for a charge), and offer equivalent access to the" \
+            "    Corresponding Source in the same way through the same place at no" \
+            "    further charge.  You need not require recipients to copy the" \
+            "    Corresponding Source along with the object code.  If the place to" \
+            "    copy the object code is a network server, the Corresponding Source" \
+            "    may be on a different server (operated by you or a third party)" \
+            "    that supports equivalent copying facilities, provided you maintain" \
+            "    clear directions next to the object code saying where to find the" \
+            "    Corresponding Source.  Regardless of what server hosts the" \
+            "    Corresponding Source, you remain obligated to ensure that it is" \
+            "    available for as long as needed to satisfy these requirements." \
+            "" \
+            "    e) Convey the object code using peer-to-peer transmission, provided" \
+            "    you inform other peers where the object code and Corresponding" \
+            "    Source of the work are being offered to the general public at no" \
+            "    charge under subsection 6d." \
+            "" \
+            "  A separable portion of the object code, whose source code is excluded" \
+            "from the Corresponding Source as a System Library, need not be" \
+            "included in conveying the object code work." \
+            "" \
+            "  A \"User Product\" is either (1) a \"consumer product\", which means any" \
+            "tangible personal property which is normally used for personal, family," \
+            "or household purposes, or (2) anything designed or sold for incorporation" \
+            "into a dwelling.  In determining whether a product is a consumer product," \
+            "doubtful cases shall be resolved in favor of coverage.  For a particular" \
+            "product received by a particular user, \"normally used\" refers to a" \
+            "typical or common use of that class of product, regardless of the status" \
+            "of the particular user or of the way in which the particular user" \
+            "actually uses, or expects or is expected to use, the product.  A product" \
+            "is a consumer product regardless of whether the product has substantial" \
+            "commercial, industrial or non-consumer uses, unless such uses represent" \
+            "the only significant mode of use of the product." \
+            "" \
+            "  \"Installation Information\" for a User Product means any methods," \
+            "procedures, authorization keys, or other information required to install" \
+            "and execute modified versions of a covered work in that User Product from" \
+            "a modified version of its Corresponding Source.  The information must" \
+            "suffice to ensure that the continued functioning of the modified object" \
+            "code is in no case prevented or interfered with solely because" \
+            "modification has been made." \
+            "" \
+            "  If you convey an object code work under this section in, or with, or" \
+            "specifically for use in, a User Product, and the conveying occurs as" \
+            "part of a transaction in which the right of possession and use of the" \
+            "User Product is transferred to the recipient in perpetuity or for a" \
+            "fixed term (regardless of how the transaction is characterized), the" \
+            "Corresponding Source conveyed under this section must be accompanied" \
+            "by the Installation Information.  But this requirement does not apply" \
+            "if neither you nor any third party retains the ability to install" \
+            "modified object code on the User Product (for example, the work has" \
+            "been installed in ROM)." \
+            "" \
+            "  The requirement to provide Installation Information does not include a" \
+            "requirement to continue to provide support service, warranty, or updates" \
+            "for a work that has been modified or installed by the recipient, or for" \
+            "the User Product in which it has been modified or installed.  Access to a" \
+            "network may be denied when the modification itself materially and" \
+            "adversely affects the operation of the network or violates the rules and" \
+            "protocols for communication across the network." \
+            "" \
+            "  Corresponding Source conveyed, and Installation Information provided," \
+            "in accord with this section must be in a format that is publicly" \
+            "documented (and with an implementation available to the public in" \
+            "source code form), and must require no special password or key for" \
+            "unpacking, reading or copying." \
+            ""
     }
 
     run_show_topic() {
@@ -3775,6 +3984,7 @@ EOF
     }
 
     while [ "$#" -gt 0 ]; do
+
         case "$1" in
             -h|h|--help|help)
 
@@ -3784,72 +3994,35 @@ EOF
                 ;;
             -v|v|--version|version)
 
-                [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${RED}version cannot be combined with other options${N_C}"
-                    
-                    exit_with_status 2
+                set_mode "version"
 
-                }
-
-                [ "$#" -eq 1 ] || { log 1 "${RED}version must be used alone${N_C}"
-                    
-                    exit_with_status 2
-
-                }
-
-                print_version
-
-                exit 0
+                shift
                 ;;
             -S|S|--show|show)
 
-                [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${RED}show cannot be combined with other options${N_C}"
+                need_optarg "$1" "$@"
 
-                    exit_with_status 2
+                set_mode "show"
 
-                }
+                set_show_topic "$2"
 
-                [ "$#" -eq 2 ] || { printf '%s\n' "Usage: ${0##*/} show {w|c|warranty|conditions}" >&2
-
-                    exit_with_status 2
-
-                }
-
-                run_show_topic "$2"
-
+                shift 2
                 ;;
             --show-warranty)
 
-                [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${RED}show cannot be combined with other options${N_C}"
+                set_mode "show"
 
-                    exit_with_status 2
+                set_show_topic "warranty"
 
-                }
-
-                [ "$#" -eq 1 ] || { log 1 "${L_GREY}--show-warranty ${RED}must be used alone${N_C}"
-
-                    exit_with_status 2
-
-                }
-
-                run_show_topic "warranty"
-
+                shift
                 ;;
             --show-conditions)
 
-                [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${RED}show cannot be combined with other options${N_C}"
+                set_mode "show"
 
-                    exit_with_status 2
+                set_show_topic "conditions"
 
-                }
-
-                [ "$#" -eq 1 ] || { log 1 "${L_GREY}--show-conditions ${RED}must be used alone${N_C}"
-
-                    exit_with_status 2
-
-                }
-
-                run_show_topic "conditions"
-
+                shift
                 ;;
             -b|b|--binary|binary)
                 SEEN_NONEXCLUSIVE=1
@@ -3935,12 +4108,6 @@ EOF
                 ;;
             -i|i|--install|install)
 
-                [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${RED}$1 cannot be combined with other options${N_C}"
-
-                    exit_with_status 2
-
-                }
-
                 set_mode "install"
 
                 if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
@@ -3955,7 +4122,9 @@ EOF
 
                 need_optarg "$1" "$@"
 
-                [ "$SEEN_R" -eq 0 ] || { log 1 "${RED}use only one of ${L_GREY}-l${RED}|${L_GREY}-r${N_C}"
+                [ "$SEEN_R" -eq 0 ] || {
+
+                    log 1 "${RED}use only one of ${L_GREY}-l${RED}|${L_GREY}-r${N_C}"
 
                     exit_with_status 2
 
@@ -3964,7 +4133,9 @@ EOF
                 SEEN_L=1
                 _LOCATION="local"
 
-                parse_dns_opt "$2" || { log 1 "${RED}invalid ${L_GREY}-l ${RED}value: ${L_GREY}$2${N_C}"
+                parse_dns_opt "$2" || {
+
+                    log 1 "${RED}invalid ${L_GREY}-l ${RED}value: ${L_GREY}$2${N_C}"
 
                     exit_with_status 2
 
@@ -4062,7 +4233,9 @@ EOF
 
                 need_optarg "$1" "$@"
 
-                [ "$SEEN_L" -eq 0 ] || { log 1 "${RED}use only one of ${L_GREY}-l${RED}|${L_GREY}-r${N_C}"
+                [ "$SEEN_L" -eq 0 ] || {
+
+                    log 1 "${RED}use only one of ${L_GREY}-l${RED}|${L_GREY}-r${N_C}"
 
                     exit_with_status 2
 
@@ -4071,7 +4244,9 @@ EOF
                 SEEN_R=1
                 _LOCATION="remote"
 
-                parse_dns_opt "$2" || { log 1 "${RED}invalid ${L_GREY}-r ${RED}value: ${L_GREY}$2${N_C}"
+                parse_dns_opt "$2" || {
+
+                    log 1 "${RED}invalid ${L_GREY}-r ${RED}value: ${L_GREY}$2${N_C}"
 
                     exit_with_status 2
 
@@ -4102,6 +4277,7 @@ EOF
                 _t_extras=""
 
                 while [ "$#" -gt 0 ]; do
+
                     case "$1" in
                         -*)
                             break
@@ -4111,6 +4287,7 @@ EOF
                             shift
                             ;;
                         [1-9]*)
+
                             case "$_t_a" in
                                 .*|^*|'||'*|/*)
                                     _t_extras="${_t_extras:+$_t_extras }$1"
@@ -4120,11 +4297,13 @@ EOF
                                     break
                                     ;;
                             esac
+
                             ;;
                         *)
                             break
                             ;;
                     esac
+
                 done
 
                 _top_parsed="$(
@@ -4148,12 +4327,6 @@ EOF
                 ;;
             -u|u|--uninstall|uninstall)
 
-                [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || { log 1 "${RED}$1 cannot be combined with other options${N_C}"
-
-                    exit_with_status 2
-
-                }
-
                 set_mode "uninstall"
 
                 if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
@@ -4162,6 +4335,7 @@ EOF
                 else
                     shift
                 fi
+
                 ;;
             -U|U|--url|url)
                 SEEN_NONEXCLUSIVE=1
@@ -4172,7 +4346,6 @@ EOF
                 shift 2
                 ;;
             -V|V|--verbosity|verbosity)
-                SEEN_NONEXCLUSIVE=1
 
                 need_optarg "$1" "$@"
 
@@ -4194,11 +4367,78 @@ EOF
 
     done
 
-    [ "$#" -eq 0 ] || { log 1 "${RED}unexpected positional argument(s): ${L_GREY}$*${N_C}"
+    [ "$#" -eq 0 ] || {
+
+        log 1 "${RED}unexpected positional argument(s): ${L_GREY}$*${N_C}"
 
         exit_with_status 2
 
     }
+
+    validate_verbosity
+
+    case "$_MODE" in
+        version)
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || {
+
+                log 1 "${RED}version cannot be combined with other options${N_C}"
+
+                exit_with_status 2
+
+            }
+
+            print_version
+
+            exit 0
+            ;;
+        show)
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || {
+
+                log 1 "${RED}show cannot be combined with other options${N_C}"
+
+                exit_with_status 2
+
+            }
+
+            [ -n "$SHOW_TOPIC" ] || {
+
+                printf '%s\n' "Usage: ${0##*/} show {w|c|warranty|conditions}" >&2
+
+                exit_with_status 2
+
+            }
+
+            run_show_topic "$SHOW_TOPIC"
+            ;;
+        install)
+
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || {
+
+                log 1 "${RED}install cannot be combined with other options${N_C}"
+
+                exit_with_status 2
+
+            }
+
+            do_install "$_INSTALL"
+
+            exit 0
+            ;;
+        uninstall)
+
+            [ "$SEEN_NONEXCLUSIVE" -eq 0 ] || {
+
+                log 1 "${RED}uninstall cannot be combined with other options${N_C}"
+
+                exit_with_status 2
+
+            }
+
+            do_uninstall "$_UNINSTALL"
+
+            exit 0
+            ;;
+    esac
 
     if [ "$_MODE" = "install" ]; then
 
@@ -4215,21 +4455,29 @@ EOF
     fi
 
     TMPROOT="${TMPDIR:-/tmp}"
-    TMPDIR="$(make_tmpdir "$TMPROOT")" || { log 0 "${BOLD}${RED}failed to create temp dir in ${L_GREY}$TMPROOT${N_C}"
+    TMPDIR="$(make_tmpdir "$TMPROOT")" || {
+
+        log 0 "${BOLD}${RED}failed to create temp dir in ${L_GREY}$TMPROOT${N_C}"
+
         exit 1
     }
 
     log 5 "${GREY}created temp dir: ${L_GREY}$TMPDIR${N_C}"
 
     ANSWERS_FILE="$TMPDIR/answers.txt"
+    QUERY_TYPE_FILE="$TMPDIR/query_types.txt"
 
-    is_port "$_PORT" || { log 1 "${RED}_PORT must be one (${L_GREY}1${RED}) of ${L_GREY}1${RED}|${L_GREY}...${RED}|${L_GREY}65535${RED}, got: ${L_GREY}$_PORT${N_C}"
+    is_port "$_PORT" || {
+
+        log 1 "${RED}_PORT must be one (${L_GREY}1${RED}) of ${L_GREY}1${RED}|${L_GREY}...${RED}|${L_GREY}65535${RED}, got: ${L_GREY}$_PORT${N_C}"
 
         exit_with_status 2
 
     }
 
-    is_posint "$_TOP" || { log 1 "${RED}invalid _TOP=${L_GREY}$_TOP${N_C}"
+    is_posint "$_TOP" || {
+
+        log 1 "${RED}invalid _TOP=${L_GREY}$_TOP${N_C}"
 
         exit_with_status 2
 
@@ -4237,25 +4485,33 @@ EOF
 
     [ -n "$_TOP_FILTERS" ] && log 4 "${GREY}top filters active: ${L_GREY}$_TOP_FILTERS${N_C}"
 
-    is_posint "$_BURST" || { log 1 "${RED}invalid _BURST=${L_GREY}$_BURST${N_C}"
+    is_posint "$_BURST" || {
+
+        log 1 "${RED}invalid _BURST=${L_GREY}$_BURST${N_C}"
 
         exit_with_status 2
 
     }
 
-    is_posint "$_MAXIMUM" || { log 1 "${RED}invalid _MAXIMUM=${L_GREY}$_MAXIMUM${N_C}"
+    is_posint "$_MAXIMUM" || {
+
+        log 1 "${RED}invalid _MAXIMUM=${L_GREY}$_MAXIMUM${N_C}"
 
         exit_with_status 2
 
     }
 
-    is_posint "$_QPS" || { log 1 "${RED}invalid _QPS=${L_GREY}$_QPS${N_C}"
+    is_posint "$_QPS" || {
+
+        log 1 "${RED}invalid _QPS=${L_GREY}$_QPS${N_C}"
 
         exit_with_status 2
 
     }
 
-    is_nonnegint "$_COLUMN" || { log 1 "${RED}invalid _COLUMN=${L_GREY}$_COLUMN${N_C}"
+    is_nonnegint "$_COLUMN" || {
+
+        log 1 "${RED}invalid _COLUMN=${L_GREY}$_COLUMN${N_C}"
 
         exit_with_status 2
 
@@ -4520,7 +4776,7 @@ EOF
     if [ -z "$_REMOTE" ]; then
         _REMOTE="$_LOCAL"
 
-        log 4 "${GREY}_REMOTE unset; falling back to _LOCAL=${L_GREY}$_LOCAL${N_C}"
+        log 5 "${GREY}_REMOTE unset; falling back to _LOCAL=${L_GREY}$_LOCAL${N_C}"
 
     fi
 
@@ -4529,7 +4785,9 @@ EOF
     case "$_LOCATION" in
         local)
 
-            is_valid_local_dns "$_LOCAL" || { log 1 "${RED}_LOCAL must be one (${L_GREY}1${RED}) of valid local resolver${N_C}, got: ${L_GREY}$_LOCAL${N_C}"
+            is_valid_local_dns "$_LOCAL" || {
+
+                log 1 "${RED}_LOCAL must be one (${L_GREY}1${RED}) of valid local resolver${N_C}, got: ${L_GREY}$_LOCAL${N_C}"
 
                 exit_with_status 2
 
@@ -4539,7 +4797,9 @@ EOF
             ;;
         remote)
 
-            is_valid_dns "$_REMOTE" || { log 1 "${RED}_REMOTE must be one (${L_GREY}1${RED}) of valid resolver${N_C}, got: ${L_GREY}$_REMOTE${N_C}"
+            is_valid_dns "$_REMOTE" || {
+
+                log 1 "${RED}_REMOTE must be one (${L_GREY}1${RED}) of valid resolver${N_C}, got: ${L_GREY}$_REMOTE${N_C}"
 
                 exit_with_status 2
 
@@ -4558,17 +4818,9 @@ EOF
     fi
 
     log_effective_config() {
-        top_filters_disp="${_TOP_FILTERS:-(${L_GREY}none${GREY})}"
+        top_filters_disp="${_TOP_FILTERS:-none}"
 
-        log 4 "${GREY}effective config:${N_C}"
-
-        log 4 "  ${L_GREY}BINARY=$_BINARY OUTPUT=$_OUTPUT LOCATION=$_LOCATION RESOLVER=$RESOLVER PORT=$_PORT TYPE=$_TYPE RANDOM=$_RANDOM${N_C}"
-
-        log 4 "  ${L_GREY}QPS=$_QPS BURST=$_BURST MAXIMUM=$_MAXIMUM DURATION=$_DURATION${N_C}"
-
-        log 4 "  ${L_GREY}TOP=$_TOP TOP_FILTERS=$top_filters_disp FORMAT=$_FORMAT COLUMN=$_COLUMN${N_C}"
-
-        log 4 "  ${L_GREY}DIRECTORY=$_DIRECTORY CUSTOM=$_CUSTOM${N_C}"
+        log 5 "${GREY}effective config: ${L_GREY}BINARY=$_BINARY OUTPUT=$_OUTPUT LOCATION=$_LOCATION RESOLVER=$RESOLVER PORT=$_PORT TYPE=$_TYPE RANDOM=$_RANDOM QPS=$_QPS BURST=$_BURST MAXIMUM=$_MAXIMUM DURATION=$_DURATION TOP=$_TOP TOP_FILTERS=$top_filters_disp FORMAT=$_FORMAT COLUMN=$_COLUMN DIRECTORY=$_DIRECTORY CUSTOM=$_CUSTOM${N_C}"
 
     }
 
@@ -4647,10 +4899,13 @@ EOF
     }
 
     cleanup_all() {
+
         print_success() {
+
             if [ -t 2 ] && [ "$_VERBOSITY" -ge 1 ]; then
                 printf '%b\n' "${L_GREY}[${GREEN}✓${L_GREY}] ${BOLD}${GREEN}done!${N_C}"
             fi
+
         }
 
         mode="${1:-graceful}"
@@ -4670,6 +4925,12 @@ EOF
             fi
 
             stop_worker_pool "$mode"
+
+            if [ -f "$QUERY_TYPE_FILE" ]; then
+
+                rm -f "$QUERY_TYPE_FILE" 2>/dev/null || true
+
+            fi
 
             exec 3<&- || true
 
@@ -4720,14 +4981,38 @@ EOF
         QUERIES_WINDOW_HUMAN="$(format_runtime_ms "$queries_window_ms")"
         SCRIPT_WINDOW_HUMAN="$(format_runtime_ms "$script_window_ms")"
 
+        query_types_line() {
+
+            [ "${_RANDOM:-0}" -eq 1 ] || return 0
+
+            [ -s "$QUERY_TYPE_FILE" ] || return 0
+
+            qt_summary="$(sort "$QUERY_TYPE_FILE" | uniq -c | awk -v GREY="$GREY" -v L_GREY="$L_GREY" '
+                {
+                    if (out != "") out = out GREY ", " L_GREY
+                    else out = out L_GREY
+                    out = out $2 GREY " (" L_GREY $1 GREY ")"
+                }
+                END {
+                    if (out != "") print out
+                }
+            ')"
+
+            [ -n "$qt_summary" ] || return 0
+
+            printf '%b[%b•%b] %bQuery types:           %b%s%b\n' \
+                "$L_GREY" "$GREY" "$L_GREY" \
+                "$GREY" "$L_GREY" "$qt_summary" "$N_C"
+        }
+
         blocked_line() {
 
             if [ "$BLOCKED" -gt 0 ]; then
-                printf '%b[%b•%b] %bBlocked (%b0.0.0.0%b): %b%s %b(%b%s%%%b)\n' \
+                printf '%b[%b•%b] %bBlocked (%b0.0.0.0%b, %b::%b): %b%s %b(%b%s%%%b)\n' \
                     "$L_GREY" "$GREY" "$L_GREY" \
                     "$GREY" "$L_GREY" "$GREY" "$L_GREY" \
-                    "$BLOCKED" "$GREY" "$L_GREY" "$BLOCK_PCT" \
-                    "$GREY"
+                    "$GREY" "$L_GREY" "$BLOCKED" "$GREY" \
+                    "$L_GREY" "$BLOCK_PCT" "$GREY"
             fi
 
         }
@@ -4735,7 +5020,7 @@ EOF
         nxdomain_line() {
 
             if [ "$NXDOMAIN" -gt 0 ]; then
-                printf ' %b[%b•%b] %bNXDOMAIN:         %b%s %b(%b%s%%%b)\n' \
+                printf '%b[%b•%b] %bNXDOMAIN:                %b%s %b(%b%s%%%b)\n' \
                     "$L_GREY" "$GREY" "$L_GREY" \
                     "$GREY" "$L_GREY" "$NXDOMAIN" "$GREY" \
                     "$L_GREY" "$NXDOMAIN_PCT" "$GREY"
@@ -4743,93 +5028,155 @@ EOF
 
         }
 
+        rr_line() {
+            label="$1"
+            value="$2"
+
+            printf '%b[%b•%b] %b%-22s%b %b%s%b\n' \
+                "$L_GREY" "$GREY" "$L_GREY" \
+                "$GREY" "$label" "$N_C" \
+                "$L_GREY" "$value" "$N_C"
+        }
+
+        fmt_ts_ms() {
+            ms="$1"
+            s=$((ms / 1000))
+
+            date -d "@$s" "+%F %T" 2>/dev/null || \
+
+            date -r "$s" "+%F %T" 2>/dev/null || \
+
+            printf '%s\n' "$s"
+        }
+
+        rr_ts_line() {
+            label="$1"
+            ms="$2"
+
+            rr_line "$label" "$(fmt_ts_ms "$ms")"
+
+        }
+
+        report_v1() {
+
+            rr_line "Total runtime:" "$SCRIPT_WINDOW_HUMAN"
+
+            rr_line "Queries sent:" "$sent"
+
+        }
+
+        report_v2() {
+
+            report_v1
+
+            blocked_line
+
+            nxdomain_line
+
+            query_types_line
+
+            rr_line "QPS:" "$ach_qps"
+
+        }
+
+        queries_start_line() {
+
+            [ $((queries_start / 1000)) -eq $((SCRIPT_START / 1000)) ] && return 0
+
+            rr_ts_line "Queries start:" "$queries_start"
+
+        }
+
+        active_query_time_line() {
+
+            [ $((active_ms / 1000)) -eq $((queries_window_ms / 1000)) ] && return 0
+
+            rr_line "Active query time:" "$ACTIVE_HUMAN"
+
+        }
+
+        last_query_sent_line() {
+
+            [ $((last_sent_ms / 1000)) -eq $((end_ms / 1000)) ] && return 0
+
+            rr_ts_line "Last query sent:" "$last_sent_ms"
+
+        }
+
+        report_v3() {
+
+            rr_line "Total runtime:" "$SCRIPT_WINDOW_HUMAN"
+
+            rr_line "Query window:" "$QUERIES_WINDOW_HUMAN"
+
+            active_query_time_line
+
+            rr_line "Queries sent:" "$sent"
+
+            blocked_line
+
+            nxdomain_line
+
+            query_types_line
+
+            rr_line "QPS:" "$ach_qps"
+
+        }
+
+        report_v4() {
+
+            rr_ts_line "Script start:" "$SCRIPT_START"
+
+            queries_start_line
+
+            last_query_sent_line
+
+            rr_ts_line "Script end:" "$end_ms"
+
+            rr_line "Total runtime:" "$SCRIPT_WINDOW_HUMAN"
+
+            rr_line "Query window:" "$QUERIES_WINDOW_HUMAN"
+
+            active_query_time_line
+
+            rr_line "Queries sent:" "$sent"
+
+            blocked_line
+
+            nxdomain_line
+
+            query_types_line
+
+            if [ "$ach_qps" != "$total_qps" ]; then
+
+                rr_line "QPS (active):" "$ach_qps"
+
+                rr_line "QPS (total):" "$total_qps"
+
+            else
+
+                rr_line "QPS:" "$ach_qps"
+
+            fi
+
+        }
+
         if [ "$v" -ge 4 ]; then
-            printf '%b[%b•%b] %bScript start:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" \
-                "$(date -d "@$((SCRIPT_START/1000))" "+%F %T" 2>/dev/null || date -r $((SCRIPT_START/1000)) 2>/dev/null)" \
-                "$N_C"
-            printf '%b[%b•%b] %bQueries start:%b     %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" \
-                "$(date -d "@$((queries_start/1000))" "+%F %T" 2>/dev/null || date -r $((queries_start/1000)) 2>/dev/null)" \
-                "$N_C"
-            printf '%b[%b•%b] %bLast query sent:%b   %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" \
-                "$(date -d "@$((last_sent_ms/1000))" "+%F %T" 2>/dev/null || date -r $((last_sent_ms/1000)) 2>/dev/null)" \
-                "$N_C"
-            printf '%b[%b•%b] %bScript end:%b        %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" \
-                "$(date -d "@$((end_ms/1000))" "+%F %T" 2>/dev/null || date -r $((end_ms/1000)) 2>/dev/null)" \
-                "$N_C"
-            printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$SCRIPT_WINDOW_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bQuery window:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$QUERIES_WINDOW_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bActive query time:%b %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$ACTIVE_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$sent" "$N_C"
 
-            blocked_line
+            report_v4
 
-            nxdomain_line
-
-            printf '%b[%b•%b] %bQPS (active):%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$ach_qps" "$N_C"
-            printf '%b[%b•%b] %bQPS (total):%b       %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$total_qps" "$N_C"
         elif [ "$v" -ge 3 ]; then
-            printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$SCRIPT_WINDOW_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bQuery window:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$QUERIES_WINDOW_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bActive query time:%b %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$ACTIVE_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$sent" "$N_C"
 
-            blocked_line
+            report_v3
 
-            nxdomain_line
-
-            printf '%b[%b•%b] %bQPS:%b               %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$ach_qps" "$N_C"
         elif [ "$v" -ge 2 ]; then
-            printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$SCRIPT_WINDOW_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$sent" "$N_C"
 
-            blocked_line
+            report_v2
 
-            nxdomain_line
-
-            printf '%b[%b•%b] %bQPS:%b               %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$ach_qps" "$N_C"
         elif [ "$v" -ge 1 ]; then
-            printf '%b[%b•%b] %bTotal runtime:%b     %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$SCRIPT_WINDOW_HUMAN" "$N_C"
-            printf '%b[%b•%b] %bQueries sent:%b      %b%s%b\n' \
-                "$L_GREY" "$GREY" "$L_GREY" "$GREY" "$N_C" \
-                "$L_GREY" "$sent" "$N_C"
+
+            report_v1
+
         fi
 
     }
@@ -4869,17 +5216,26 @@ EOF
     case "$SRC_NAME" in
         *.zip)
 
-            need_cmd unzip || { log 1 "${RED}unzip required for zip sources${N_C}"
+            need_cmd unzip || {
+
+                log 1 "${RED}unzip required for zip sources${N_C}"
+
                 exit 1
             }
 
             ZIP_EXTRACT="$TMPDIR/unzipped.txt"
 
-            validate_zip_file "$READ_SOURCE" || { log 1 "${RED}zip integrity check failed: ${L_GREY}$SRC_NAME${N_C}"
+            validate_zip_file "$READ_SOURCE" || {
+
+                log 1 "${RED}zip integrity check failed: ${L_GREY}$SRC_NAME${N_C}"
+
                 exit 1
             }
 
-            extract_zip_to_file "$READ_SOURCE" "$ZIP_EXTRACT" || { log 1 "${RED}failed to extract zip source: ${L_GREY}$SRC_NAME${N_C}"
+            extract_zip_to_file "$READ_SOURCE" "$ZIP_EXTRACT" || {
+
+                log 1 "${RED}failed to extract zip source: ${L_GREY}$SRC_NAME${N_C}"
+
                 exit 1
             }
 
@@ -5020,7 +5376,10 @@ EOF
 
     _DOMAINS="$(wc -l < "$DOMAINS" | tr -d ' ')"
 
-    [ "$_DOMAINS" -gt 0 ] || { log 1 "${RED}no domains found in source after filtering${N_C}"
+    [ "$_DOMAINS" -gt 0 ] || {
+
+        log 1 "${RED}no domains found in source after filtering${N_C}"
+
         exit 1
     }
 
@@ -5066,7 +5425,10 @@ EOF
         return 1
     }
 
-    open_domains || { log 0 "${BOLD}${RED}failed to open domain list: ${L_GREY}$DOMAINS${N_C}"
+    open_domains || {
+
+        log 0 "${BOLD}${RED}failed to open domain list: ${L_GREY}$DOMAINS${N_C}"
+
         exit 1
     }
 
@@ -5115,6 +5477,8 @@ EOF
     if [ "$_RANDOM" -eq 1 ]; then
 
         init_random_rr_pool
+
+        init_query_type_tracking
 
         log 3 "${BLUE}random RR mode enabled with pool: ${L_GREY}$RANDOM_RR_POOL${N_C}"
 
@@ -5186,6 +5550,9 @@ EOF
         fi
 
         SENT=$((SENT + 1))
+
+        bump_query_type_count "$qtype"
+
         LAST_SENT_MS="$(now_ms)"
         MTOKENS=$((MTOKENS - 1000))
     done
