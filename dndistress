@@ -3,11 +3,9 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.3"
+VERSION="1.2.4"
 BRANCH="master"
-
 LICENSE="GNU General Public License v3.0 or later"
-
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT_YEAR="(C) 2026"
 AUTHOR_NAME="saint-lascivious, (Hayden Pearce)"
@@ -269,6 +267,7 @@ log() {
     else
         printf '%b %b\n' "$pfx" "$msg" >&2
     fi
+
 }
 
 is_posint() {
@@ -362,11 +361,14 @@ compute_runtime_metrics() {
         BLOCKED=$(awk '$0=="0.0.0.0" || $0=="::"' "$ANSWERS_FILE" | wc -l)
         NXDOMAIN=$(awk '$0=="NXDOMAIN"' "$ANSWERS_FILE" | wc -l)
         TOTAL=$(wc -l < "$ANSWERS_FILE")
+
         if [ "$TOTAL" -gt 0 ]; then
             BLOCK_PCT=$(awk -v b="$BLOCKED" -v t="$TOTAL" 'BEGIN{printf "%.0f", (b/t)*100}')
             NXDOMAIN_PCT=$(awk -v n="$NXDOMAIN" -v t="$TOTAL" 'BEGIN{printf "%.0f", (n/t)*100}')
         fi
+
     fi
+
 }
 
 is_running_under_own_service() {
@@ -1101,6 +1103,7 @@ prescan_verbosity() {
 
         case "$1" in
             -V|--verbosity)
+
                 [ "$#" -ge 2 ] || {
 
                     log 1 "${RED}missing argument for option: ${L_GREY}$1${N_C}"
@@ -1302,58 +1305,79 @@ write_bash_completion() {
 
     cat > "$out" <<'EOF'
 _dndistress_completion() {
-    local cur prev cmd i
-    local has_random=0
-    local has_type=0
-    local has_mode=0
+    local cur prev cmd tok i
+    local has_random=0 has_type=0 has_show_topic=0 has_mode_path=0
+
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    local commands="install uninstall show help version"
+    type compopt >/dev/null 2>&1 && compopt +o default +o bashdefault +o filenames 2>/dev/null || true
 
-    local global_opts="-b -B -c -C -d -D -f -F -h -i -l -L -m -o -p -q -r \
-        -R -s -S -t -T -u -U -v -V --allow-any --binary --burst --column \
-        --custom --deny-any --directory --duration --file --force-burst \
-        --force-maximum --format --help --install --local --location \
-        --maximum --output --port --qps --random --remote --seconds --show \
-        --show-conditions --show-warranty --top --type --uninstall --url \
-        --verbosity --version"
+    local commands="install uninstall show help version"
+    local show_topics="w c warranty conditions"
+
+    local common_opts="-h --help -V --verbosity"
+    local mode_switch_opts="-i --install -u --uninstall -S --show \
+        --show-warranty --show-conditions -v --version"
+    local run_opts="-b -B -c -C -d -D -f -F -l -L -m -o -p -q -r -R -s -t -T \
+        -U --allow-any --binary --burst --column --custom --deny-any \
+        --directory --duration --file --force-burst --force-maximum --format \
+        --local --location --maximum --output --port --qps --random --remote \
+        --seconds --top --type --url"
 
     for ((i=1; i<COMP_CWORD; i++)); do
-
-        case "${COMP_WORDS[i]}" in
+        tok="${COMP_WORDS[i]}"
+        case "$tok" in
+            install|-i|--install)
+                cmd="install"
+                ;;
+            uninstall|-u|--uninstall)
+                cmd="uninstall"
+                ;;
+            show|-S|--show|--show-warranty|--show-conditions)
+                cmd="show"
+                case "$tok" in
+                    --show-warranty|--show-conditions)
+                        has_show_topic=1
+                        ;;
+                esac
+                ;;
+            version|-v|--version)
+                cmd="version"
+                ;;
+            help|-h|--help)
+                cmd="help"
+                ;;
             -R|--random)
                 has_random=1
                 ;;
             -T|--type)
                 has_type=1
                 ;;
-            install|uninstall|show|version)
-                has_mode=1
-                cmd="${COMP_WORDS[i]}"
+            w|c|warranty|conditions)
+
+                [[ "$cmd" == "show" ]] && has_show_topic=1
+
+                ;;
+            -V|--verbosity)
+                ((i++))
+                ;;
+            *)
+
+                if [[ "$cmd" == "install" || "$cmd" == "uninstall" ]]; then
+
+                    [[ "$tok" != -* ]] && has_mode_path=1
+
+                fi
+
                 ;;
         esac
 
     done
 
-    if [[ $has_random -eq 1 ]]; then
-        global_opts="${global_opts// -T / }"
-        global_opts="${global_opts// --type / }"
-    fi
-
-    if [[ $has_type -eq 1 ]]; then
-        global_opts="${global_opts// -R / }"
-        global_opts="${global_opts// --random / }"
-    fi
-
-    if [[ $has_random -eq 1 && ( "$prev" == "-T" || "$prev" == "--type" ) ]]; then
-        COMPREPLY=()
-        return 0
-    fi
-
     if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "$commands $global_opts" -- "$cur") )
+        COMPREPLY=( $(compgen -W "$commands $mode_switch_opts $common_opts $run_opts" -- "$cur") )
         return 0
     fi
 
@@ -1446,30 +1470,65 @@ _dndistress_completion() {
             return 0
             ;;
         -S|--show|show)
-            COMPREPLY=( $(compgen -W "w c warranty conditions" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$show_topics" -- "$cur") )
             return 0
             ;;
     esac
 
-    if [[ "$cmd" == "show" ]]; then
-        COMPREPLY=( $(compgen -W "w c warranty conditions" -- "$cur") )
-        return 0
-    fi
-
-    if [[ "$cmd" == "install" || "$cmd" == "uninstall" ]]; then
-
-        if [[ "$cur" != -* ]]; then
-            _filedir -d
+    case "$cmd" in
+        show)
+            if [[ "$prev" == "show" || "$prev" == "-S" || "$prev" == "--show" ]]; then
+                COMPREPLY=( $(compgen -W "$show_topics" -- "$cur") )
+                return 0
+            fi
+            if [[ $has_show_topic -eq 1 ]]; then
+                COMPREPLY=( $(compgen -W "$common_opts" -- "$cur") )
+                return 0
+            fi
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "$common_opts -S --show --show-warranty --show-conditions" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "$show_topics" -- "$cur") )
+            fi
             return 0
-        fi
+            ;;
+        install|uninstall)
 
+            if [[ $has_mode_path -eq 0 ]]; then
+
+                if [[ "$cur" == -* ]]; then
+                    COMPREPLY=( $(compgen -W "$common_opts" -- "$cur") )
+                else
+                    _filedir -d
+                fi
+
+                return 0
+            fi
+
+            COMPREPLY=( $(compgen -W "$common_opts" -- "$cur") )
+            return 0
+            ;;
+        version|help)
+            COMPREPLY=( $(compgen -W "$common_opts" -- "$cur") )
+            return 0
+            ;;
+    esac
+
+    if [[ $has_random -eq 1 ]]; then
+        run_opts="${run_opts// -T / }"
+        run_opts="${run_opts// --type / }"
     fi
 
-    COMPREPLY=( $(compgen -W "$global_opts" -- "$cur") )
+    if [[ $has_type -eq 1 ]]; then
+        run_opts="${run_opts// -R / }"
+        run_opts="${run_opts// --random / }"
+    fi
+
+    COMPREPLY=( $(compgen -W "$run_opts $mode_switch_opts $common_opts" -- "$cur") )
     return 0
 }
 
-complete -o bashdefault -o default -o filenames -F _dndistress_completion dndistress
+complete -F _dndistress_completion dndistress
 EOF
 
 }
@@ -2204,6 +2263,7 @@ WORKER_STOP_TOKEN="__DNDISTRESS_STOP__"
 
 enqueue_job() {
     payload="$1"
+
     [ "$WORKER_COUNT" -gt 0 ] || return 1
 
     idx=$(( (WORKER_NEXT % WORKER_COUNT) + 1 ))
@@ -2275,6 +2335,7 @@ start_worker_pool() {
                 [ -n "$d" ] || continue
 
                 query_one "$d" "$qtype" || true
+
             done
 
         ) &
@@ -2296,7 +2357,7 @@ SEEN_C=0
 SEEN_NONEXCLUSIVE=0
 
 print_version() {
-    printf '%s\n' "$NAME $VERSION $BRANCH"
+    printf '%s\n' "$NAME v${VERSION} $BRANCH"
 }
 
 print_start_notice() {
@@ -2308,11 +2369,7 @@ print_start_notice() {
     print_banner >&2
 
     printf '%b\n' \
-        "    ${GREY}Version:${N_C}  ${L_GREY}$VERSION $BRANCH${N_C}" \
-        "    ${GREY}Contact:${N_C}  ${L_GREY}$CONTACT${N_C}" \
-        "    ${GREY}License:${N_C}  ${L_GREY}$LICENSE${N_C}" \
-        "" \
-        "    ${L_GREY}$NAME $COPYRIGHT_YEAR $AUTHOR_NAME${N_C}" \
+        "          ${L_GREY}$NAME v${VERSION} $COPYRIGHT_YEAR $AUTHOR_NAME${N_C}" \
         "" \
         "    ${GREY}This program comes with ${BOLD}${RED}ABSOLUTELY NO WARRANTY${N_C}${GREY}; for details type '${L_GREY}show w${GREY}'.${N_C}" \
         "    ${GREY}This is free software, and you are welcome to redistribute it${N_C}" \
@@ -2817,9 +2874,9 @@ show_help_topic() {
         info)
             _METRICS="$(collect_script_metrics)"
 
-            cat <<EOF
-Topic: info
+            printf '%b\n\n' "Topic: ${BOLD}info${N_C}"
 
+            cat <<EOF
 Name:                  $NAME
 
 Version:               $VERSION
@@ -2841,9 +2898,9 @@ EOF
             ;;
         description)
 
-            cat <<EOF
-Topic: description
+            printf '%b\n\n' "Topic: ${BOLD}description${N_C}"
 
+            cat <<EOF
 $NAME continuously (or time-bounded) sends DNS a configurable volume of 
 queries of any type from a prepared domain top domains list and/or custom list,
 using token-bucket scheduling and a worker pool.
@@ -2855,9 +2912,9 @@ benchmarking, or otherwise simulating workloads against resolvers.
 
 Key properties:
   - Deterministic rate shaping via qps + burst
-  - Parallel execution via maximum workers
-  - Flexible source handling (download/cache/file/custom list)
-  - Resolver targeting (local/remote, IPv4/IPv6, optional port override)
+  - Parallel execution via worker pool
+  - Flexible domain source handling (download/cache/file/custom list)
+  - Resolver targeting (local/remote, IPv4/IPv6, port)
   - Query tool selection (dig/nslookup) and RR type selection
 
 $NAME is an impractically complex resolver workload tool for controlled DNS
@@ -2867,11 +2924,11 @@ EOF
             ;;
         runtime)
 
-            cat <<EOF
-Topic: runtime
+            printf '%b\n\n' "Topic: ${BOLD}runtime${N_C}"
 
+            cat <<EOF
 Data path:
-  domain source(s) -> parser -> deduplication -> top-N -> dispatch -> workers
+  Domain source(s) -> parser -> deduplication -> top-N -> dispatch -> workers.
 
 Primary controls:
   -q/--qps          tokens per second
@@ -2886,9 +2943,9 @@ Secondary controls:
 Timer guard:
   When running under ${UNIT_BASE}.service from ${UNIT_BASE}.timer,
   _DURATION is clamped to the timer period (OnUnitActiveSec) to prevent
-  runaway execution. This means that if you set _DURATION to a value longer
-  than the timer period, it will be automatically reduced to match the timer
-  period.
+  runaway execution. If you set _DURATION to a value longer than the
+  timer period, it will be automatically reduced to match the timer period.
+
   Setting _DURATION to 0 is also clamped by not treating it as infinite when
   running under the timer.
 EOF
@@ -2896,9 +2953,9 @@ EOF
             ;;
         resolver)
 
-            cat <<EOF
-Topic: resolver
+            printf '%b\n\n' "Topic: ${BOLD}resolver${N_C}"
 
+            cat <<EOF
 Resolver controls:
   -L/--location     local|remote
   -l/--local        local resolver address
@@ -2914,12 +2971,12 @@ EOF
             ;;
         domains)
 
+            printf '%b\n\n' "Topic: ${BOLD}domains${N_C}"
+
             cat <<EOF
-Topic: domains
-
 Domain parsing/validation policy:
-
   $NAME uses a pragmatic DNS hostname filter for workload hygiene.
+
   It is intentionally not full RFC/IDN validation.
 
 Current behavior (summary):
@@ -2942,11 +2999,10 @@ EOF
             force_burst_disp="${_FORCE_BURST:-0}"
             burst_effective_disp="${_BURST_EFFECTIVE:-32}"
 
+            printf '%b\n\n' "Topic: ${BOLD}environment${N_C}"
+
             cat <<EOF
-Topic: environment
-
-  Configuration Variables:
-
+Configuration Variables:
   _BINARY      (-b, --binary)           $_BINARY
   _BURST       (-B, --burst)            $_BURST
   _BURST_EFFECTIVE                      $burst_effective_disp
@@ -2977,48 +3033,41 @@ Topic: environment
   _VERBOSITY   (-V, --verbosity)        $_VERBOSITY
   _DENY_ANY    (--deny-any/--allow-any) $_DENY_ANY
 
-  Runtime/System Variables:
+Runtime/System Variables:
+  USE_LOGGER              ${USE_LOGGER:-0}
+  TMPDIR                  ${TMPDIR:-/tmp}
+  _TIMER_PERIOD           ${_TIMER_PERIOD:-"(auto-detect)"}
 
-  USE_LOGGER                            ${USE_LOGGER:-0}
-  TMPDIR                                ${TMPDIR:-/tmp}
-  _TIMER_PERIOD                         ${_TIMER_PERIOD:-"(auto-detect)"}
+  _STATUS_ENABLED         $_STATUS_ENABLED
+  _STATUS_DIR             $_STATUS_DIR
+  _STATUS_FILE            $_STATUS_FILE
+  _LOCK_DIR               $_LOCK_DIR
+  _LOCK_FILE              $_LOCK_FILE
 
-  Status Reporting Variables:
+  BURST_TRIGGERED         ${BURST_TRIGGERED:-0}
+  PEAK_CONCURRENT_WORKERS ${PEAK_CONCURRENT_WORKERS:-0}
 
-  _STATUS_ENABLED                       $_STATUS_ENABLED
-  _STATUS_DIR                           $_STATUS_DIR
-  _STATUS_FILE                          $_STATUS_FILE
-  _LOCK_DIR                             $_LOCK_DIR
-  _LOCK_FILE                            $_LOCK_FILE
-
-  Metrics/Tracking Variables:
-
-  BURST_TRIGGERED                       ${BURST_TRIGGERED:-0}
-  PEAK_CONCURRENT_WORKERS               ${PEAK_CONCURRENT_WORKERS:-0}
-
-  Service/Unit Configuration:
-
-  SERVICE_DIR                           $SERVICE_DIR
-  UNIT_BASE                             $UNIT_BASE
-  DEFAULT_ROOT_DIRECTORY                $DEFAULT_ROOT_DIRECTORY
-  DEFAULT_STATE_ROOT                    $DEFAULT_STATE_ROOT
-  DEFAULT_RUNTIME_ROOT                  $DEFAULT_RUNTIME_ROOT
-  STATUS_BASENAME                       $STATUS_BASENAME
-  LOCK_BASENAME                         $LOCK_BASENAME
-  COMPLETION_BASENAME                   $COMPLETION_BASENAME
-  COMPLETION_DIR                        $COMPLETION_DIR
+  SERVICE_DIR             $SERVICE_DIR
+  UNIT_BASE               $UNIT_BASE
+  DEFAULT_ROOT_DIRECTORY  $DEFAULT_ROOT_DIRECTORY
+  DEFAULT_STATE_ROOT      $DEFAULT_STATE_ROOT
+  DEFAULT_RUNTIME_ROOT    $DEFAULT_RUNTIME_ROOT
+  STATUS_BASENAME         $STATUS_BASENAME
+  LOCK_BASENAME           $LOCK_BASENAME
+  COMPLETION_BASENAME     $COMPLETION_BASENAME
+  COMPLETION_DIR          $COMPLETION_DIR
 EOF
 
             ;;
         status)
 
-            cat <<EOF
-Topic: status
+            printf '%b\n\n' "Topic: ${BOLD}status${N_C}"
 
+            cat <<EOF
 Purpose:
   When enabled, DNdistresS writes a JSON status and metrics file on exit
-  (via the exit_with_status function). This file can be used for monitoring,
-  automation, or integration with external systems.
+  (via the creatively named exit_with_status function). This file can be used
+  for monitoring, automation, or integration with external systems.
 
 How to enable:
   1. Set the environment variable _STATUS_ENABLED=1
@@ -3061,15 +3110,16 @@ EOF
             ;;
         install)
 
-            cat <<EOF
-Topic: install
+            printf '%b\n\n' "Topic: ${BOLD}install${N_C}"
 
+            cat <<EOF
 Usage:
   ${0##*/} install [PATH]
   ${0##*/} -i [PATH]
   ${0##*/} --install [PATH]
 
-Default PATH: $_INSTALL
+Default PATH:
+  $_INSTALL
 
 Installs script + service + timer, then enables and starts ${UNIT_BASE}.timer.
 EOF
@@ -3077,15 +3127,16 @@ EOF
             ;;
         uninstall)
 
-            cat <<EOF
-Topic: uninstall
+            printf '%b\n\n' "Topic: ${BOLD}uninstall${N_C}"
 
+            cat <<EOF
 Usage:
   ${0##*/} uninstall [PATH]
   ${0##*/} -u [PATH]
   ${0##*/} --uninstall [PATH]
 
-Default PATH: $_UNINSTALL
+Default PATH:
+  $_UNINSTALL
 
 Removes script + service + timer, disables/stops units, daemon-reloads systemd.
 EOF
@@ -3093,9 +3144,9 @@ EOF
             ;;
         show)
 
-            cat <<'EOF'
-Topic: show
+            printf '%b\n\n' "Topic: ${BOLD}show${N_C}"
 
+            cat <<'EOF'
 Usage:
   show {w|c|warranty|conditions}
   -S {w|c|warranty|conditions}
@@ -3115,25 +3166,26 @@ EOF
             ;;
         version)
 
-            cat <<'EOF'
-Topic: version
+            printf '%b\n\n' "Topic: ${BOLD}version${N_C}"
 
+            cat <<'EOF'
 Usage:
   -v | --version | version
 
-Prints tool version and exits.
+Prints the dndistress version and exits.
 EOF
 
             ;;
         binary)
 
-            cat <<EOF
-Topic: binary (-b, --binary)
+            printf '%b\n\n' "Topic: ${BOLD}binary${N_C}"
 
+            cat <<EOF
 Values:
   auto | dig | nslookup
 
-Default: $_BINARY
+Default:
+  $_BINARY
 
 auto selects dig first, then nslookup.
 EOF
@@ -3141,14 +3193,15 @@ EOF
             ;;
         burst)
 
-            cat <<EOF
-Topic: burst (-B, --burst)
+            printf '%b\n\n' "Topic: ${BOLD}burst${N_C}"
 
+            cat <<EOF
 Meaning:
   Max burst size for token bucket. Bursts allow temporary worker overflow
   beyond -m/--maximum to simulate traffic spikes.
 
-Default: 32
+Default:
+  $_BURST
 
 Validation: positive integer.
 
@@ -3169,53 +3222,58 @@ EOF
             ;;
         column)
 
-            cat <<EOF
-Topic: column (-c, --column)
+            printf '%b\n\n' "Topic: ${BOLD}column${N_C}"
 
+            cat <<EOF
 Meaning:
   CSV column index when reading file/url source.
 
-Default: $_COLUMN
+Default:
+  $_COLUMN
 
 0 means auto-detect.
 
-Validation: non-negative integer.
+Validation:
+  Non-negative integer.
 EOF
 
             ;;
         custom)
 
-            cat <<EOF
-Topic: custom (-C, --custom)
+            printf '%b\n\n' "Topic: ${BOLD}custom${N_C}"
 
+            cat <<EOF
 Meaning:
   Custom domain file prepended to primary source before dedupe/top-N.
 
-Default: $_CUSTOM
+Default:
+  $_CUSTOM
 EOF
 
             ;;
         directory)
 
-            cat <<EOF
-Topic: directory (-d, --directory)
+            printf '%b\n\n' "Topic: ${BOLD}directory${N_C}"
 
+            cat <<EOF
 Meaning:
   Cache/work directory for downloaded sources and cache files.
 
-Default: $_DIRECTORY
+Default:
+  $_DIRECTORY
 EOF
 
             ;;
         duration)
 
-            cat <<EOF
-Topic: duration (-D, --duration)
+            printf '%b\n\n' "Topic: ${BOLD}duration${N_C}"
 
+            cat <<EOF
 Meaning:
   Runtime length in seconds.
 
-Default: $_DURATION
+Default:
+  $_DURATION
 
 0 = continuous loop.
 
@@ -3231,13 +3289,14 @@ EOF
             ;;
         file)
 
-            cat <<EOF
-Topic: file (-f, --file)
+            printf '%b\n\n' "Topic: ${BOLD}file${N_C}"
 
+            cat <<EOF
 Meaning:
   Use local input file; overrides URL download path.
 
-Default: (empty)
+Default:
+  (empty)
 
 Must be readable.
 EOF
@@ -3245,13 +3304,14 @@ EOF
             ;;
         format)
 
-            cat <<EOF
-Topic: format (-F, --format)
+            printf '%b\n\n' "Topic: ${BOLD}format${N_C}"
 
+            cat <<EOF
 Values:
   auto | plain | csv
 
-Default: $_FORMAT
+Default:
+  $_FORMAT
 
 Note:
   Domain validation is pragmatic (not full RFC/IDN validation).
@@ -3260,28 +3320,30 @@ EOF
             ;;
         local)
 
-            cat <<EOF
-Topic: local resolver (-l, --local)
+            printf '%b\n\n' "Topic: ${BOLD}local${N_C}"
 
+            cat <<EOF
 Meaning:
   Local resolver address. Also sets location=local.
 
 Accepted:
   IPv4/IPv6, optional #port or [ipv6]:port.
 
-Default: $_LOCAL
+Default:
+  $_LOCAL
 EOF
 
             ;;
         location)
 
-            cat <<EOF
-Topic: location (-L, --location)
+            printf '%b\n\n' "Topic: ${BOLD}location${N_C}"
 
+            cat <<EOF
 Values:
   local | remote
 
-Default: $_LOCATION
+Default:
+  $_LOCATION
 
 Controls whether _LOCAL or _REMOTE is used as resolver.
 EOF
@@ -3289,15 +3351,17 @@ EOF
             ;;
         maximum)
 
-            cat <<EOF
-Topic: maximum workers (-m, --maximum)
+            printf '%b\n\n' "Topic: ${BOLD}maximum${N_C}"
 
+            cat <<EOF
 Meaning:
   Max concurrent query workers.
 
-Default: $_MAXIMUM
+Default:
+  $_MAXIMUM
 
-Validation: positive integer, clamped to 128.
+Validation:
+  Positive integer, clamped to 128.
 
 Note:
   By default, the maximum worker count is clamped to 128 to prevent runaway
@@ -3308,9 +3372,9 @@ EOF
             ;;
         force-maximum)
 
-            cat <<EOF
-Topic: force-maximum (--force-maximum)
+            printf '%b\n\n' "Topic: ${BOLD}force-maximum${N_C}"
 
+            cat <<EOF
 Meaning:
   Overrides the clamp on maximum worker count when used with -m/--maximum.
 
@@ -3322,13 +3386,14 @@ EOF
             ;;
         output)
 
-            cat <<EOF
-Topic: output (-o, --output)
+            printf '%b\n\n' "Topic: ${BOLD}output${N_C}"
 
+            cat <<EOF
 Values:
   quiet | answer
 
-Default: $_OUTPUT
+Default:
+  $_OUTPUT
 
 quiet suppresses answer output; answer prints response records.
 EOF
@@ -3336,44 +3401,49 @@ EOF
             ;;
         port)
 
-            cat <<EOF
-Topic: port (-p, --port)
+            printf '%b\n\n' "Topic: ${BOLD}port${N_C}"
 
+            cat <<EOF
 Meaning:
   DNS service port used by query tool.
 
-Default: $_PORT
+Default:
+  $_PORT
 
-Range: 1..65535.
+Range:
+  1..65535.
 EOF
 
             ;;
         qps)
 
-            cat <<EOF
-Topic: qps (-q, --qps)
+            printf '%b\n\n' "Topic: ${BOLD}qps${N_C}"
 
+            cat <<EOF
 Meaning:
   Token refill rate (queries/sec target).
 
-Default: $_QPS
+Default:
+  $_QPS
 
-Validation: positive integer.
+Validation:
+  Positive integer.
 EOF
 
             ;;
         random)
 
-            cat <<EOF
-Topic: random (-R, --random)
+            printf '%b\n\n' "Topic: ${BOLD}random${N_C}"
 
+            cat <<EOF
 Meaning:
   Enables per-query RR type randomization from a built-in common pool.
 
 Pool:
   A AAAA CNAME MX NS TXT
 
-Default: $_RANDOM (0=off, 1=on)
+Default:
+  $_RANDOM (0=off, 1=on)
 
 Behavior:
   When enabled, DNdistresS picks one RR type from the pool for each
@@ -3387,28 +3457,30 @@ EOF
             ;;
         remote)
 
-            cat <<EOF
-Topic: remote resolver (-r, --remote)
+            printf '%b\n\n' "Topic: ${BOLD}remote${N_C}"
 
+            cat <<EOF
 Meaning:
   Remote resolver address. Also sets location=remote.
 
 Accepted:
   IPv4/IPv6, optional #port or [ipv6]:port.
 
-Default: $_REMOTE
+Default:
+  $_REMOTE
 EOF
 
             ;;
         seconds)
 
-            cat <<EOF
-Topic: seconds cache TTL (-s, --seconds)
+            printf '%b\n\n' "Topic: ${BOLD}seconds${N_C}"
 
+            cat <<EOF
 Meaning:
   Cache TTL for downloaded source.
 
-Default: $_SECONDS
+Default:
+  $_SECONDS
 
 0 disables cache.
 
@@ -3419,9 +3491,9 @@ EOF
             ;;
         top)
 
-            cat <<EOF
-Topic: top (-t, --top)
+            printf '%b\n\n' "Topic: ${BOLD}top${N_C}"
 
+            cat <<EOF
 Meaning:
   Keep top N domains after deduplication, optionally filtered by one or more
   patterns. Multiple patterns are OR-matched; a domain passes if any pattern
@@ -3446,22 +3518,27 @@ Examples:
   -t 5000 ^google ^facebook
   -t .co.nz 1000
 
-Default count: $_TOP
-Default filters: (none)
+Default count:
+  $_TOP
 
-Validation: count is a positive integer; patterns are matched in order.
+Default filters:
+  (none)
+
+Validation:
+  Count is a positive integer; patterns are matched in order.
 EOF
 
             ;;
         type)
 
-            cat <<EOF
-Topic: type (-T, --type)
+            printf '%b\n\n' "Topic: ${BOLD}type${N_C}"
 
+            cat <<EOF
 Meaning:
   DNS RR type for dig/nslookup (A, MX, AAAA, TXT, etc).
 
-Default: $_TYPE
+Default:
+  $_TYPE
 
 Also accepted:
   Numeric RR type IDs (examples: 1, 15, 28, 65, etc).
@@ -3507,13 +3584,14 @@ EOF
             ;;
         deny-any)
 
-            cat <<EOF
-Topic: deny-any (--deny-any / --allow-any)
+            printf '%b\n\n' "Topic: ${BOLD}deny-any${N_C}"
 
+            cat <<EOF
 Meaning:
   Controls whether querying RR type ANY (ID 255) is permitted.
 
-Default: --deny-any (ANY queries are rejected)
+Default:
+  --deny-any (ANY queries are rejected)
 
 --deny-any    Reject _TYPE=ANY (default behavior).
 --allow-any   Permit _TYPE=ANY queries.
@@ -3528,21 +3606,22 @@ EOF
             ;;
         url)
 
-            cat <<EOF
-Topic: url (-U, --url)
+            printf '%b\n\n' "Topic: ${BOLD}url${N_C}"
 
+            cat <<EOF
 Meaning:
   Source URL used when -f/--file is not provided.
 
-Default: $_URL
+Default:
+  $_URL
 EOF
 
             ;;
         verbosity)
 
-            cat <<EOF
-Topic: verbosity (-V, --verbosity)
+            printf '%b\n\n' "Topic: ${BOLD}verbosity${N_C}"
 
+            cat <<EOF
 Values:
   0=CRITICAL
   1=ERROR
@@ -3551,7 +3630,8 @@ Values:
   4=DEBUG
   5=TRACE
 
-Default: $_VERBOSITY
+Default:
+  $_VERBOSITY
 
 Note:
   Runtime reports are displayed at verbosity levels 1 (ERROR) and higher,
@@ -3777,7 +3857,7 @@ do_dndistress() {
         printf '%b\n' \
             "                             ${BOLD}ABSOLUTELY NO WARRANTY${N_C}" \
             "" \
-            "  15. Disclaimer of Warranty." \
+            "  ${BOLD}15. Disclaimer of Warranty.${N_C}" \
             "" \
             "  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY" \
             "APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT" \
@@ -3788,7 +3868,7 @@ do_dndistress() {
             "IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF" \
             "ALL NECESSARY SERVICING, REPAIR OR CORRECTION." \
             "" \
-            "  16. Limitation of Liability." \
+            "  ${BOLD}16. Limitation of Liability.${N_C}" \
             "" \
             "  IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING" \
             "WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS" \
@@ -3809,7 +3889,7 @@ do_dndistress() {
         printf '%b\n' \
             "                              ${BOLD}TERMS AND CONDITIONS${N_C}" \
             "" \
-            "  4. Conveying Verbatim Copies." \
+            "  ${BOLD}4. Conveying Verbatim Copies.${N_C}" \
             "" \
             "  You may convey verbatim copies of the Program's source code as you" \
             "receive it, in any medium, provided that you conspicuously and" \
@@ -3822,21 +3902,21 @@ do_dndistress() {
             "  You may charge any price or no price for each copy that you convey," \
             "and you may offer support or warranty protection for a fee." \
             "" \
-            "  5. Conveying Modified Source Versions." \
+            "  ${BOLD}5. Conveying Modified Source Versions.${N_C}" \
             "" \
             "  You may convey a work based on the Program, or the modifications to" \
             "produce it from the Program, in the form of source code under the" \
             "terms of section 4, provided that you also meet all of these conditions:" \
             "" \
-            "    a) The work must carry prominent notices stating that you modified" \
+            "    ${BOLD}a)${N_C} The work must carry prominent notices stating that you modified" \
             "    it, and giving a relevant date." \
             "" \
-            "    b) The work must carry prominent notices stating that it is" \
+            "    ${BOLD}b)${N_C} The work must carry prominent notices stating that it is" \
             "    released under this License and any conditions added under section" \
             "    7.  This requirement modifies the requirement in section 4 to" \
             "    \"keep intact all notices\"." \
             "" \
-            "    c) You must license the entire work, as a whole, under this" \
+            "    ${BOLD}c)${N_C} You must license the entire work, as a whole, under this" \
             "    License to anyone who comes into possession of a copy.  This" \
             "    License will therefore apply, along with any applicable section 7" \
             "    additional terms, to the whole of the work, and all its parts," \
@@ -3844,7 +3924,7 @@ do_dndistress() {
             "    permission to license the work in any other way, but it does not" \
             "    invalidate such permission if you have separately received it." \
             "" \
-            "    d) If the work has interactive user interfaces, each must display" \
+            "    ${BOLD}d)${N_C} If the work has interactive user interfaces, each must display" \
             "    Appropriate Legal Notices; however, if the Program has interactive" \
             "    interfaces that do not display Appropriate Legal Notices, your" \
             "    work need not make them do so." \
@@ -3859,19 +3939,19 @@ do_dndistress() {
             "in an aggregate does not cause this License to apply to the other" \
             "parts of the aggregate." \
             "" \
-            "  6. Conveying Non-Source Forms." \
+            "  ${BOLD}6. Conveying Non-Source Forms.${N_C}" \
             "" \
             "  You may convey a covered work in object code form under the terms" \
             "of sections 4 and 5, provided that you also convey the" \
             "machine-readable Corresponding Source under the terms of this License," \
             "in one of these ways:" \
             "" \
-            "    a) Convey the object code in, or embodied in, a physical product" \
+            "    ${BOLD}a)${N_C} Convey the object code in, or embodied in, a physical product" \
             "    (including a physical distribution medium), accompanied by the" \
             "    Corresponding Source fixed on a durable physical medium" \
             "    customarily used for software interchange." \
             "" \
-            "    b) Convey the object code in, or embodied in, a physical product" \
+            "    ${BOLD}b)${N_C} Convey the object code in, or embodied in, a physical product" \
             "    (including a physical distribution medium), accompanied by a" \
             "    written offer, valid for at least three years and valid for as" \
             "    long as you offer spare parts or customer support for that product" \
@@ -3883,13 +3963,13 @@ do_dndistress() {
             "    conveying of source, or (2) access to copy the" \
             "    Corresponding Source from a network server at no charge." \
             "" \
-            "    c) Convey individual copies of the object code with a copy of the" \
+            "    ${BOLD}c)${N_C} Convey individual copies of the object code with a copy of the" \
             "    written offer to provide the Corresponding Source.  This" \
             "    alternative is allowed only occasionally and noncommercially, and" \
             "    only if you received the object code with such an offer, in accord" \
             "    with subsection 6b." \
             "" \
-            "    d) Convey the object code by offering access from a designated" \
+            "    ${BOLD}d)${N_C} Convey the object code by offering access from a designated" \
             "    place (gratis or for a charge), and offer equivalent access to the" \
             "    Corresponding Source in the same way through the same place at no" \
             "    further charge.  You need not require recipients to copy the" \
@@ -3902,7 +3982,7 @@ do_dndistress() {
             "    Corresponding Source, you remain obligated to ensure that it is" \
             "    available for as long as needed to satisfy these requirements." \
             "" \
-            "    e) Convey the object code using peer-to-peer transmission, provided" \
+            "    ${BOLD}e)${N_C} Convey the object code using peer-to-peer transmission, provided" \
             "    you inform other peers where the object code and Corresponding" \
             "    Source of the work are being offered to the general public at no" \
             "    charge under subsection 6d." \
@@ -4409,6 +4489,7 @@ do_dndistress() {
             }
 
             run_show_topic "$SHOW_TOPIC"
+
             ;;
         install)
 
@@ -4644,6 +4725,7 @@ do_dndistress() {
             _DURATION="$period"
             return 0
         fi
+
     }
 
     enforce_timer_duration_guard
@@ -4675,6 +4757,7 @@ do_dndistress() {
         _BURST_EFFECTIVE="$_BURST"
 
         log 3 "${BLUE}burst force override enabled: ${L_GREY}$_BURST ${BLUE}(unclamped)${N_C}"
+
     fi
 
     case "$_FORMAT" in
@@ -4776,7 +4859,7 @@ do_dndistress() {
     if [ -z "$_REMOTE" ]; then
         _REMOTE="$_LOCAL"
 
-        log 5 "${GREY}_REMOTE unset; falling back to _LOCAL=${L_GREY}$_LOCAL${N_C}"
+        log 5 "${GREY}_REMOTE remains unset; falling back to _LOCAL=${L_GREY}$_LOCAL${N_C}"
 
     fi
 
@@ -4972,7 +5055,7 @@ do_dndistress() {
         return 0
     }
 
-    runtime_report() {
+    show_runtime_report() {
         v="${1:-$_VERBOSITY}"
 
         compute_runtime_metrics
@@ -5045,8 +5128,8 @@ do_dndistress() {
             date -d "@$s" "+%F %T" 2>/dev/null || \
 
             date -r "$s" "+%F %T" 2>/dev/null || \
+                printf '%s\n' "$s"
 
-            printf '%s\n' "$s"
         }
 
         rr_ts_line() {
@@ -5193,7 +5276,7 @@ do_dndistress() {
 
         if [ -t 2 ] && [ "$_VERBOSITY" -gt 0 ]; then
 
-            runtime_report
+            show_runtime_report
 
         fi
 
@@ -5268,6 +5351,7 @@ do_dndistress() {
         fi
 
     cat "$MAIN_DOMAINS"
+
     } | awk \
         -v filters="$_TOP_FILTERS" \
         -v top="$_TOP" \
@@ -5279,9 +5363,9 @@ do_dndistress() {
             out_count++
 
             if (dbg_trace) {
-                printf " %s[%s•%s] %stop domain: %s%s %s(%s%d%s)%s\n", L_GREY, GREY, L_GREY, \
-                    GREY, L_GREY, d, GREY, L_GREY, out_count, GREY, \
-                    N_C > "/dev/stderr"
+                printf " %s[%s•%s] %stop domain: %s%s %s(%s%d%s)%s\n", \
+                    L_GREY, GREY, L_GREY, GREY, L_GREY, d, GREY, L_GREY, \
+                    out_count, GREY, N_C > "/dev/stderr"
             }
 
             print d
@@ -5323,8 +5407,11 @@ do_dndistress() {
                     } else {
                         ftype[nf] = "substr"
                     }
+
                 }
+
             }
+
         }
 
         {
@@ -5339,6 +5426,7 @@ do_dndistress() {
             matched = 0
 
             for (i = 1; i <= nf; i++) {
+
                 if (ftype[i] == "suffix") {
                     fl   = fpat[i]
                     flen = length(fl)
@@ -5363,10 +5451,12 @@ do_dndistress() {
                     }
 
                 } else {
+
                     if (index(d, fpat[i]) > 0) {
                         matched = 1
                         break
                     }
+
                 }
             }
 
@@ -5401,7 +5491,6 @@ do_dndistress() {
 
             return 1
         }
-
     }
 
     next_domain() {
@@ -5419,6 +5508,7 @@ do_dndistress() {
                 DOMAINS_EOF=0
                 return 0
             fi
+
         fi
 
         DOMAINS_EOF=1
@@ -5466,6 +5556,7 @@ do_dndistress() {
             sleep 1
 
         fi
+
     }
 
     start_worker_pool "$_MAXIMUM" || exit 1
@@ -5573,9 +5664,10 @@ do_dndistress() {
 
     if [ -t 2 ] && [ "$_VERBOSITY" -gt 0 ]; then
 
-        runtime_report
+        show_runtime_report
 
     fi
+
 }
 
 if [ "${DNDISTRESS_TEST_MODE:-0}" != "1" ]; then
