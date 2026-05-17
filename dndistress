@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.6"
+VERSION="1.2.7"
 BRANCH="master"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
@@ -1650,7 +1650,7 @@ do_uninstall() {
 
     systemctl_maybe stop "${UNIT_BASE}.service"
 
-    log 4 "${GREY}disabled timer unit ${L_GREY}${UNIT_BASE}.timer ${GREY}and stopped service unit ${L_GREY}${UNIT_BASE}.service${N_C}"
+    log 4 "${GREY}disable ${L_GREY}${UNIT_BASE}.timer ${GREY}and stop ${L_GREY}${UNIT_BASE}.service${N_C}"
 
     rm -f "$SERVICE_DIR/${UNIT_BASE}.service" "$SERVICE_DIR/${UNIT_BASE}.timer" || true
 
