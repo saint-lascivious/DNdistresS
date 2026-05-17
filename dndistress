@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.7"
+VERSION="1.2.8"
 BRANCH="master"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
@@ -131,7 +131,7 @@ SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
 
 colourset() {
 
-    if { [ -t 1 ] && [ "$(tput colors)" -ge 8 ]; }; then
+    if { [ -t 1 ] && [ "$(tput colors)" -ge 8 ]; } || [ "${FORCE_COLOUR:-0}" -eq 1 ]; then
         BLUE='\033[94m'
         BOLD='\033[1m'
         CYAN='\033[96m'
