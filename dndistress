@@ -1098,6 +1098,18 @@ validate_verbosity() {
 }
 
 prescan_verbosity() {
+    _prescan_help=0
+
+    for _arg in "$@"; do
+        case "$_arg" in
+            -h|h|--help|help)
+                _prescan_help=1
+                break
+                ;;
+        esac
+    done
+
+    [ "$_prescan_help" -eq 0 ] || return 0
 
     while [ "$#" -gt 0 ]; do
 
