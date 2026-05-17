@@ -51,21 +51,18 @@ read_generated_at() {
 
 }
 
+DOC_NAME="$(read_cli_var NAME)"
 DOC_VERSION="$(read_cli_var VERSION)"
+DOC_COPYRIGHT="$(read_cli_var COPYRIGHT_YEAR)"
 DOC_AUTHOR="$(read_cli_var AUTHOR_NAME)"
-DOC_COPYRIGHT_YEAR="$(read_cli_var COPYRIGHT_YEAR)"
-DOC_CONTACT="$(read_cli_var CONTACT)"
-DOC_LICENSE="$(read_cli_var LICENSE)"
+
+[ -n "${DOC_NAME:-}" ] || DOC_NAME="unknown"
 
 [ -n "${DOC_VERSION:-}" ] || DOC_VERSION="unknown"
 
+[ -n "${DOC_COPYRIGHT:-}" ] || DOC_COPYRIGHT="unknown"
+
 [ -n "${DOC_AUTHOR:-}" ] || DOC_AUTHOR="unknown"
-
-[ -n "${DOC_COPYRIGHT_YEAR:-}" ] || DOC_COPYRIGHT_YEAR="unknown"
-
-[ -n "${DOC_CONTACT:-}" ] || DOC_CONTACT="unknown"
-
-[ -n "${DOC_LICENSE:-}" ] || DOC_LICENSE="unknown"
 
 SCRIPT_NAME="$(basename -- "$0")"
 GENERATED_AT="$(read_generated_at)"
@@ -355,11 +352,7 @@ EOF
           | |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )
           |_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
 
-    Contact: $DOC_CONTACT
-    License: $DOC_LICENSE
-    Version: $DOC_VERSION
-
-    DNdistresS Copyright $DOC_COPYRIGHT_YEAR $DOC_AUTHOR
+          $DOC_NAME v${DOC_VERSION} $DOC_COPYRIGHT $DOC_AUTHOR
 
     This program comes with ABSOLUTELY NO WARRANTY; for details type 'show w'.
     This is free software, and you are welcome to redistribute it
