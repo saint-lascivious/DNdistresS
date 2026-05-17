@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.4"
+VERSION="1.2.5"
 BRANCH="master"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
@@ -1102,7 +1102,7 @@ prescan_verbosity() {
     while [ "$#" -gt 0 ]; do
 
         case "$1" in
-            -V|--verbosity)
+            -V|V|--verbosity|verbosity)
 
                 [ "$#" -ge 2 ] || {
 
@@ -1114,6 +1114,10 @@ prescan_verbosity() {
 
                 _VERBOSITY="$2"
                 shift 2
+                ;;
+            -V=*|V=*|--verbosity=*|verbosity=*)
+                _VERBOSITY="${1#*=}"
+                shift
                 ;;
             *)
                 shift
@@ -4191,8 +4195,15 @@ do_dndistress() {
                 set_mode "install"
 
                 if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
-                    _INSTALL="$2"
-                    shift 2
+                    case "$2" in
+                        V|verbosity)
+                            shift
+                            ;;
+                        *)
+                            _INSTALL="$2"
+                            shift 2
+                            ;;
+                    esac
                 else
                     shift
                 fi
@@ -4410,8 +4421,15 @@ do_dndistress() {
                 set_mode "uninstall"
 
                 if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
-                    _UNINSTALL="$2"
-                    shift 2
+                    case "$2" in
+                        V|verbosity)
+                            shift
+                            ;;
+                        *)
+                            _UNINSTALL="$2"
+                            shift 2
+                            ;;
+                    esac
                 else
                     shift
                 fi
@@ -4431,6 +4449,10 @@ do_dndistress() {
 
                 _VERBOSITY="$2"
                 shift 2
+                ;;
+            -V=*|V=*|--verbosity=*|verbosity=*)
+                _VERBOSITY="${1#*=}"
+                shift
                 ;;
             --)
                 shift
