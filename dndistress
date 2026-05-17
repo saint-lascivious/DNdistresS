@@ -3,7 +3,7 @@
 NAME="DNdistresS"
 
 SCRIPT_NAME="${0##*/}"
-VERSION="1.2.5"
+VERSION="1.2.6"
 BRANCH="master"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
@@ -1321,7 +1321,7 @@ _dndistress_completion() {
     local commands="install uninstall show help version"
     local show_topics="w c warranty conditions"
 
-    local common_opts="-h --help -V --verbosity"
+    local common_opts="-h --help -V --verbosity V verbosity"
     local mode_switch_opts="-i --install -u --uninstall -S --show \
         --show-warranty --show-conditions -v --version"
     local run_opts="-b -B -c -C -d -D -f -F -l -L -m -o -p -q -r -R -s -t -T \
@@ -1364,8 +1364,10 @@ _dndistress_completion() {
                 [[ "$cmd" == "show" ]] && has_show_topic=1
 
                 ;;
-            -V|--verbosity)
+            -V|--verbosity|V|verbosity)
                 ((i++))
+                ;;
+            -V=*|--verbosity=*|V=*|verbosity=*)
                 ;;
             *)
 
@@ -1469,7 +1471,7 @@ _dndistress_completion() {
         -U|--url)
             return 0
             ;;
-        -V|--verbosity)
+        -V|--verbosity|V|verbosity)
             COMPREPLY=( $(compgen -W "0 1 2 3 4 5" -- "$cur") )
             return 0
             ;;
