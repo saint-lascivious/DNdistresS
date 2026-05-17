@@ -520,7 +520,9 @@ if has_lib_func parse_top_opt && has_lib_func parse_duration; then
 
 else
 
-    ok "library parser tests skipped (functions unavailable after refactor)"
+    not_ok "library parser tests skipped"
+
+    printf "  functions unavailable after refactor\n"
 
 fi
 
@@ -619,10 +621,10 @@ fi
 
 warranty_out="$("$SCRIPT" show w 2>&1)"
 
-assert_contains "warranty shows disclaimer" "$warranty_out" "NO WARRANTY"
+assert_contains "show warranty shows warranty" "$warranty_out" "THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY"
 
 conditions_out="$("$SCRIPT" show c 2>&1)"
 
-assert_contains "conditions shows GPL section 4" "$conditions_out" "Conveying Verbatim Copies"
+assert_contains "show conditions shows conditions" "$conditions_out" "You may convey verbatim copies of the Program's source code as you"
 
 printf '\nPASS: %s passed\n' "$pass"
