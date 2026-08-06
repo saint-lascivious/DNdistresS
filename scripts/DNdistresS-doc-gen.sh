@@ -394,31 +394,26 @@ EOF
 
  Instead, edit the source material and then run this script to regenerate it.
 -->
+EOF
 
-# DNdistresS
+    cat <<'EOF'
+<table align="center"><tr><td>
+<pre>
+ _____   _____       _ _                             _____
+|  __ \ |  __ \     | (_)       _                   / ____)
+| |  \ \| |  \ \  __| |_  ___ _| |_  ____ _____  __( (____
+| |   | | |   | |/ _  | |/___)_   _)/ ___) ___ |/___)____ \
+| |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )
+|_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
+</pre>
+</td></tr></table>
 
->> Can we stop and get DNSPerf?
+EOF
 
-> We have DNSPerf at home.
-
-The DNSPerf we have at home:
-
-\`\`\`text
-           _____   _____       _ _                             _____
-          |  __ \ |  __ \     | (_)       _                   / ____)
-          | |  \ \| |  \ \  __| |_  ___ _| |_  ____ _____  __( (____
-          | |   | | |   | |/ _  | |/___)_   _)/ ___) ___ |/___)____ \\
-          | |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )
-          |_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
-
-          $DOC_NAME v${DOC_VERSION} $DOC_COPYRIGHT $DOC_AUTHOR
-
-    This program comes with ABSOLUTELY NO WARRANTY; for details type 'show w'.
-    This is free software, and you are welcome to redistribute it
-    under certain conditions; type 'show c' for details.
-\`\`\`
-
----
+    cat <<'EOF'
+<p align="center">
+  Harass your local Domain Name Server.
+</p>
 
 ## Quick Start
 
@@ -426,6 +421,7 @@ The DNSPerf we have at home:
 - [usage](#usage)
 
 ## Index
+
 EOF
 
     emit_index_group "General"
