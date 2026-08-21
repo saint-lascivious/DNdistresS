@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# exit-code-contract.sh - deterministic exit code contract checks.
+# 60-mode-exclusivity-contract.sh - command modes exclusive with run modes.
 
 set -eu
 
@@ -19,7 +19,7 @@ while [ "$#" -gt 0 ]; do
         h|-h|help|--help)
 
             usage
-            
+
             exit 0
             ;;
         --)
@@ -28,9 +28,9 @@ while [ "$#" -gt 0 ]; do
             ;;
         -*)
             printf 'error: unknown option: %s\n' "$1" >&2
-            
+
             usage >&2
-            
+
             exit 2
             ;;
         *)
@@ -43,9 +43,10 @@ done
 
 ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)"
 SCRIPT="${1:-$ROOT_DIR/DNdistresS}"
+USAGE=2
 
 [ -r "$SCRIPT" ] || {
-    printf 'error: SCRIPT not readable: %s\n' "$SCRIPT" >&2
+    printf 'error: script not readable: %s\n' "$SCRIPT" >&2
     exit 2
 }
 
@@ -57,9 +58,7 @@ SCRIPT="${1:-$ROOT_DIR/DNdistresS}"
 failed=0
 
 ok() {
-
     [ "$QUIET" -eq 1 ] || printf 'ok: %s\n' "$1"
-
 }
 
 not_ok() {
@@ -67,41 +66,43 @@ not_ok() {
     failed=1
 }
 
-expect_exit() {
-    name="$1"
-    want="$2"
+assert_exit() {
+    desc="$1"
+    expected="$2"
     shift 2
 
     set +e
-    "$@" >/dev/null 2>&1
+    "$SCRIPT" "$@" >/dev/null 2>&1
     rc=$?
     set -e
 
-    if [ "$rc" -ne "$want" ]; then
+    if [ "$rc" -eq "$expected" ]; then
 
-        not_ok "$name (got $rc, want $want)"
+        ok "$desc"
 
     else
 
-        ok "$name"
+        not_ok "$desc (got=$rc expected=$expected)"
 
     fi
 
 }
 
-expect_exit "unknown option" 2 "$SCRIPT" --definitely-not-a-real-option
+assert_exit "version cannot be combined with --qps" "$USAGE" --version --qps 10
 
-expect_exit "invalid _VERBOSITY env" 2 env _VERBOSITY=9 "$SCRIPT" --version
+assert_exit "show cannot be combined with --qps" "$USAGE" show w --qps 10
 
-expect_exit "invalid _PORT env" 2 env _PORT=0 "$SCRIPT"
+assert_exit "install cannot be combined with --qps" "$USAGE" install /tmp --qps 10
 
-expect_exit "invalid LOG_MODE env" 2 env LOG_MODE=invalid "$SCRIPT" --version
+assert_exit "uninstall cannot be combined with --qps" "$USAGE" uninstall /tmp --qps 10
 
-expect_exit "install mode rejects run flags" 2 "$SCRIPT" install -f /dev/null -F plain -t 1 -q 1 -D 1
+assert_exit "-v cannot be combined with -q" "$USAGE" -v -q 10
 
-expect_exit "uninstall mode rejects run flags" 2 "$SCRIPT" uninstall -f /dev/null -F plain -t 1 -q 1 -D 1
+assert_exit "-S cannot be combined with -q" "$USAGE" -S w -q 10
 
-expect_exit "show mode rejects run flags" 2 "$SCRIPT" show w -f /dev/null -F plain -t 1 -q 1 -D 1
+assert_exit "-i cannot be combined with -q" "$USAGE" -i /tmp -q 10
+
+assert_exit "-u cannot be combined with -q" "$USAGE" -u /tmp -q 10
 
 [ "$failed" -eq 0 ] || exit 1
 

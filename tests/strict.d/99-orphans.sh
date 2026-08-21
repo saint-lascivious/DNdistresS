@@ -6,10 +6,6 @@ set -eu
 
 QUIET=0
 
-ALLOWLIST='
-strict_smoke_orphan_pass
-'
-
 usage() {
     printf 'Usage: %s [q|-q|quiet|--quiet] [SCRIPT_PATH]\n' "${0##*/}"
 }
@@ -52,6 +48,15 @@ SCRIPT="${1:-$ROOT_DIR/DNdistresS}"
     printf 'error: script not readable: %s\n' "$SCRIPT" >&2
     exit 2
 }
+
+[ -x "$SCRIPT" ] || {
+    printf 'error: SCRIPT not executable: %s\n' "$SCRIPT" >&2
+    exit 2
+}
+
+ALLOWLIST='
+strict_smoke_orphan_pass
+'
 
 is_allowlisted() {
     fn="$1"
@@ -120,9 +125,7 @@ ok() {
 }
 
 not_ok() {
-
-    [ "$QUIET" -eq 1 ] || printf 'not ok: %s\n' "$1"
-
+    printf 'not ok: %s\n' "$1" >&2
     failed=1
 }
 

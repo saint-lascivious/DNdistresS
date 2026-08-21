@@ -42,23 +42,36 @@ while [ "$#" -gt 0 ]; do
 done
 
 ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)"
-CLI="${1:-$ROOT_DIR/DNdistresS}"
+SCRIPT="${1:-$ROOT_DIR/DNdistresS}"
 
-[ -x "$CLI" ] || { printf 'error: CLI not executable: %s\n' "$CLI" >&2; exit 2; }
+[ -r "$SCRIPT" ] || {
+    printf 'error: SCRIPT not readable: %s\n' "$SCRIPT" >&2
+    exit 2
+}
+
+[ -x "$SCRIPT" ] || {
+    printf 'error: SCRIPT not executable: %s\n' "$SCRIPT" >&2
+    exit 2
+}
 
 topics="$(
 
-    "$CLI" --help topics 2>/dev/null | awk '
+    "$SCRIPT" --help topics 2>/dev/null | awk '
         /^[[:space:]]+General:/  { sect=1; next }
         /^[[:space:]]+Commands:/ { sect=1; next }
         /^[[:space:]]+Options:/  { sect=1; next }
         /^[[:space:]]*Aliases accepted:/ { sect=0; next }
 
         sect && /^[[:space:]]{4}[[:alnum:] _-]+$/ {
+
             for (i=1; i<=NF; i++) {
+
                 if ($i ~ /^[a-z][a-z0-9-]*$/) print $i
+
             }
+
         }
+
     ' | awk '!seen[$0]++' | grep -Ev '^(help|general)$' || true
 
 )"
@@ -74,15 +87,13 @@ ok() {
 }
 
 not_ok() {
-
-    [ "$QUIET" -eq 1 ] || printf 'not ok: %s\n' "$1"
-
+    printf 'not ok: %s\n' "$1" >&2
     failed=1
 }
 
 for t in $topics; do
     set +e
-    out="$("$CLI" --help "$t" 2>&1)"
+    out="$("$SCRIPT" --help "$t" 2>&1)"
     rc=$?
     set -e
 
