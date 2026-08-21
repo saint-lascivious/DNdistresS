@@ -255,7 +255,7 @@ user@hostname:~$ ./DNdistresS --duration 10
 [·] completed QPS (total):  7.32
 [·] answer QPS (window):    45.14
 [·] answer QPS (total):     20.45
-  [✓] done!
+[✓] done!
 ```
 
 EOF
