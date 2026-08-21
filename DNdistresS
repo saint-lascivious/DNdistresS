@@ -5,13 +5,14 @@ set -eu
 NAME="DNdistresS"
 
 VERSION_MAJOR=0
-VERSION_MINOR=1
+VERSION_MINOR=2
 VERSION_MICRO=0
+VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-07-29"
+RELEASE_DATE="2026-08-22"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT_YEAR="(C) 2026"
@@ -34,7 +35,11 @@ EXIT_ABORT=130
 
 epoch_s_posix() {
     TZ=UTC0 date '+%Y %m %d %H %M %S' | awk '
-        function leap(y) { return ((y%4==0 && y%100!=0) || (y%400==0)) }
+
+        function leap(y) {
+            return ((y%4==0 && y%100!=0) || (y%400==0))
+        }
+
         BEGIN {
             md[1]=31; md[2]=28; md[3]=31; md[4]=30; md[5]=31; md[6]=30
             md[7]=31; md[8]=31; md[9]=30; md[10]=31; md[11]=30; md[12]=31
@@ -108,6 +113,22 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
+DNDISTRESS_TEST_FAULT_STOP_REASON="${DNDISTRESS_TEST_FAULT_STOP_REASON:-}"
+DNDISTRESS_TEST_FAULT_USED="${DNDISTRESS_TEST_FAULT_USED:-0}"
+
+test_fault_should_fire() {
+
+    [ "${DNDISTRESS_TEST_MODE:-0}" = "1" ] || return 1
+
+    [ -n "${DNDISTRESS_TEST_FAULT_STOP_REASON:-}" ] || return 1
+
+    [ "${DNDISTRESS_TEST_FAULT_USED:-0}" -eq 0 ] || return 1
+
+    DNDISTRESS_TEST_FAULT_USED=1
+
+    return 0
+}
+
 _BINARY="${_BINARY:-auto}"
 _TYPE="${_TYPE:-A}"
 _RANDOM="${_RANDOM:-0}"
@@ -175,6 +196,21 @@ _LOCAL="${_LOCAL:-127.0.0.1}"
 _REMOTE="${_REMOTE:-}"
 _PORT="${_PORT:-53}"
 
+_RESOLVER_STRATEGY="${_RESOLVER_STRATEGY:-rr}"
+_LOCAL_POOL="${_LOCAL_POOL:-}"
+_REMOTE_POOL="${_REMOTE_POOL:-}"
+_LOCAL_RR_INDEX="${_LOCAL_RR_INDEX:-1}"
+_REMOTE_RR_INDEX="${_REMOTE_RR_INDEX:-1}"
+ACTIVE_LOCATION="${ACTIVE_LOCATION:-}"
+
+DISPATCH_FANOUT="${DISPATCH_FANOUT:-1}"
+DISPATCH_TOKEN_COST="${DISPATCH_TOKEN_COST:-1}"
+DISPATCH_BURST_LOGICAL="${DISPATCH_BURST_LOGICAL:-$_BURST}"
+DIG_BATCH_LOGICAL_SIZE_EFFECTIVE="${DIG_BATCH_LOGICAL_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE_EFFECTIVE}"
+
+_FASTEST_PROBE_COUNT="${_FASTEST_PROBE_COUNT:-5}"
+_FASTEST_PROBE_DOMAIN="${_FASTEST_PROBE_DOMAIN:-random}"
+
 _FILE="${_FILE:-}"
 _URL="${_URL:-https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip}"
 _FORMAT="${_FORMAT:-auto}"
@@ -202,6 +238,7 @@ STATUS_BASENAME="${STATUS_BASENAME:-DNdistresS-status.json}"
 LOCK_BASENAME="${LOCK_BASENAME:-DNdistresS-status.lock}"
 TIMER_BOOT_DELAY="${TIMER_BOOT_DELAY:-10min}"
 TIMER_RANDOM_DELAY="${TIMER_RANDOM_DELAY:-5min}"
+TIMER_SERVICE_PERIOD="${TIMER_SERVICE_PERIOD:-1h}"
 
 BURST_TRIGGERED="${BURST_TRIGGERED:-0}"
 PEAK_CONCURRENT_WORKERS="${PEAK_CONCURRENT_WORKERS:-0}"
@@ -212,6 +249,7 @@ SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
     [-D _DURATION] [-f _FILE] [-F _FORMAT] [-h] [-i _INSTALL] [-l _LOCAL]
     [-L _LOCATION] [-m _MAXIMUM[!]] [--force-maximum] [--force-burst]
     [-o _OUTPUT] [-p _PORT] [-q _QPS] [-r _REMOTE] [-s _SECONDS]
+    [--resolver-strategy rr|random|fastest|parallel]
     [-S {w|c|warranty|conditions}]
     [-t (N|PATTERN)...] [-T _TYPE] [-R] [-u _UNINSTALL] [-U _URL] [-v]
     [-V _VERBOSITY] [--deny-any] [--allow-any] [--auto-tune] [--full]
@@ -541,6 +579,14 @@ exit_with_status() {
     status_locked=0
 
     if need_cmd flock; then
+
+        if ! mkdir -p "$_LOCK_DIR" 2>/dev/null; then
+
+            log 1 "failed to create lock dir: ${LIGHT_GREY}$_LOCK_DIR"
+
+            exit "$code"
+        fi
+
         exec 9>"$_LOCK_FILE"
 
         flock 9
@@ -549,6 +595,13 @@ exit_with_status() {
     fi
 
     compute_runtime_metrics
+
+    active_location_disp="${ACTIVE_LOCATION:-$_LOCATION}"
+    local_pool_count="$(pool_count "${_LOCAL_POOL:-}")"
+    remote_pool_count="$(pool_count "${_REMOTE_POOL:-}")"
+
+    local_pool_disp="$(printf '%s\n' "${_LOCAL_POOL:-}" | awk 'NF{printf "%s%s", (n++?",":""), $0}')"
+    remote_pool_disp="$(printf '%s\n' "${_REMOTE_POOL:-}" | awk 'NF{printf "%s%s", (n++?",":""), $0}')"
 
     now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
@@ -564,6 +617,7 @@ exit_with_status() {
   "metrics": {
     "sent": $sent,
     "queries_sent": $sent,
+    "logical_sent": $logical_sent,
     "active_ms": $active_ms,
     "queries_window_ms": $queries_window_ms,
     "script_window_ms": $script_window_ms,
@@ -578,6 +632,14 @@ exit_with_status() {
     "completed_qps_window": $COMPLETED_QPS_WINDOW,
     "completed_qps_total": $COMPLETED_QPS_TOTAL,
     "resolver": $(json_escape "$RESOLVER"),
+    "active_location": $(json_escape "$active_location_disp"),
+    "resolver_strategy": $(json_escape "$_RESOLVER_STRATEGY"),
+    "fastest_selected_endpoint": $(json_escape "${FASTEST_SELECTED_ENDPOINT:-}"),
+    "fastest_selected_ms": $(json_escape "${FASTEST_SELECTED_MS:-}"),
+    "fastest_selected_domain": $(json_escape "${FASTEST_SELECTED_DOMAIN:-}"),
+    "fastest_selected_type": $(json_escape "${FASTEST_SELECTED_TYPE:-}"),
+    "local_pool_count": $local_pool_count,
+    "remote_pool_count": $remote_pool_count,
     "blocked": $BLOCKED,
     "blocked_pct": $BLOCK_PCT,
     "nxdomain": $NXDOMAIN,
@@ -586,7 +648,12 @@ exit_with_status() {
     "burst_effective": $_BURST_EFFECTIVE,
     "bursts_triggered": $BURST_TRIGGERED,
     "peak_concurrent_workers": $PEAK_CONCURRENT_WORKERS,
-    "dig_batches_enqueued": $DIG_BATCHES_ENQUEUED
+    "dig_batches_enqueued": $DIG_BATCHES_ENQUEUED,
+    "dispatch_fanout": ${DISPATCH_FANOUT:-1},
+    "dispatch_token_cost": ${DISPATCH_TOKEN_COST:-1},
+    "dispatch_burst_logical": ${DISPATCH_BURST_LOGICAL:-$_BURST},
+    "dig_batch_logical_size_effective": ${DIG_BATCH_LOGICAL_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE_EFFECTIVE},
+    "drain_forced": ${DRAIN_FORCED:-0}
   },
   "config": {
     "auto_tune": $_AUTO_TUNE,
@@ -605,13 +672,23 @@ exit_with_status() {
     "dig_batch": $_DIG_BATCH,
     "dig_batch_size": $_DIG_BATCH_SIZE,
     "dig_batch_size_effective": $_DIG_BATCH_SIZE_EFFECTIVE,
+    "dig_batch_logical_size_effective": ${DIG_BATCH_LOGICAL_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE_EFFECTIVE},
     "directory": $(json_escape "$_DIRECTORY"),
     "duration": $_DURATION,
     "file": $(json_escape "$_FILE"),
     "format": $(json_escape "$_FORMAT"),
     "install": $(json_escape "$_INSTALL"),
     "local": $(json_escape "$_LOCAL"),
+    "local_pool": $(json_escape "$local_pool_disp"),
     "location": $(json_escape "$_LOCATION"),
+    "location_forced": $_LOCATION_FORCED,
+    "location_explicit": $_LOCATION_EXPLICIT,
+    "resolver_strategy": $(json_escape "$_RESOLVER_STRATEGY"),
+    "dispatch_fanout": ${DISPATCH_FANOUT:-1},
+    "dispatch_token_cost": ${DISPATCH_TOKEN_COST:-1},
+    "dispatch_burst_logical": ${DISPATCH_BURST_LOGICAL:-$_BURST},
+    "fastest_probe_count": $_FASTEST_PROBE_COUNT,
+    "fastest_probe_domain": $(json_escape "$_FASTEST_PROBE_DOMAIN"),
     "log_mode": $(json_escape "$LOG_MODE"),
     "log_tag": $(json_escape "$LOG_TAG"),
     "maximum": $_MAXIMUM,
@@ -619,6 +696,7 @@ exit_with_status() {
     "qps": $_QPS,
     "random": $_RANDOM,
     "remote": $(json_escape "$_REMOTE"),
+    "remote_pool": $(json_escape "$remote_pool_disp"),
     "seconds": $_SECONDS,
     "top": $_TOP,
     "top_filters": $(json_escape "$_TOP_FILTERS"),
@@ -690,6 +768,517 @@ require_nonnegint() {
 
 }
 
+append_pool_unique() {
+    _pool="$1"
+    _entry="$2"
+
+    [ -n "$_entry" ] || return 0
+
+    case "$_pool" in
+        local)
+            printf '%s\n' "$_LOCAL_POOL" | grep -Fx -- "$_entry" >/dev/null 2>&1 && return 0
+            _LOCAL_POOL="${_LOCAL_POOL}${_LOCAL_POOL:+
+}$_entry"
+            ;;
+        remote)
+            printf '%s\n' "$_REMOTE_POOL" | grep -Fx -- "$_entry" >/dev/null 2>&1 && return 0
+            _REMOTE_POOL="${_REMOTE_POOL}${_REMOTE_POOL:+
+}$_entry"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+pool_get() {
+
+    case "$1" in
+        local)
+            printf '%s\n' "${_LOCAL_POOL:-}"
+            ;;
+        remote)
+            printf '%s\n' "${_REMOTE_POOL:-}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+}
+
+pool_count() {
+    printf '%s\n' "$1" | awk 'NF{c++} END{print c+0}'
+}
+
+pool_nth() {
+    _pool="$1"
+    _n="$2"
+    printf '%s\n' "$_pool" | awk -v n="$_n" 'NF{c++; if (c==n) { print; exit }}'
+}
+
+sample_domains_from_file() {
+    f="$1"
+    count="${2:-1}"
+    mode="${3:-random}"
+
+    [ -r "$f" ] || return 1
+
+    is_posint "$count" || count=1
+
+    [ "$count" -ge 1 ] || count=1
+
+    case "$mode" in
+        random)
+
+            awk -v n="$count" '
+                NF { a[++c] = $0 }
+                END {
+
+                    if (c < 1) exit 1
+
+                    if (n > c) n = c
+
+                    srand()
+
+                    for (i=c; i>1; i--) {
+                        j = int(rand() * i) + 1
+                        t = a[i]; a[i] = a[j]; a[j] = t
+                    }
+
+                    for (i=1; i<=n; i++) print a[i]
+
+                }
+            ' "$f"
+
+            ;;
+        first|head)
+
+            awk -v n="$count" 'NF{print; if (++c>=n) exit}' "$f"
+
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+}
+
+resolve_probe_qtype() {
+
+    if [ "${_RANDOM:-0}" -eq 1 ]; then
+
+        pick_query_type
+
+        printf '%s\n' "$PICKED_QTYPE"
+    else
+        printf '%s\n' "$_TYPE"
+    fi
+
+}
+
+probe_query_latency_ms() {
+    domain="$1"
+    qtype="$2"
+    out_file="$3"
+    resolver_host="$4"
+    resolver_port="$5"
+
+    s_ms="$(mono_ms)"
+
+    query_one "$domain" "$qtype" "$out_file" "$resolver_host" "$resolver_port" >/dev/null 2>&1 || true
+
+    e_ms="$(mono_ms)"
+
+    d_ms=$((e_ms - s_ms))
+
+    [ "$d_ms" -lt 1 ] && d_ms=1
+
+    printf '%s\n' "$d_ms"
+}
+
+probe_dig_batch_latency_ms() {
+    batch_file="$1"
+    out_file="$2"
+    resolver_host="$3"
+    resolver_port="$4"
+
+    s_ms="$(mono_ms)"
+
+    query_dig_batch_file "$batch_file" "$out_file" "$resolver_host" "$resolver_port" >/dev/null 2>&1 || true
+
+    e_ms="$(mono_ms)"
+
+    d_ms=$((e_ms - s_ms))
+
+    [ "$d_ms" -lt 1 ] && d_ms=1
+
+    printf '%s\n' "$d_ms"
+}
+
+latency_stats_file() {
+    f="$1"
+    trim_pct="${2:-10}"
+    pct="${3:-95}"
+    mode="${4:-percent}"
+
+    [ -r "$f" ] || return 1
+
+    sort -n "$f" 2>/dev/null | awk -v trim="$trim_pct" -v p="$pct" -v mode="$mode" '
+        $1 ~ /^[0-9]+$/ { a[++n] = $1 }
+        END {
+
+            if (n < 1) exit 1
+
+            lo=1; hi=n
+
+            if (mode == "edges1") {
+                if (n >= 3) { lo=2; hi=n-1 }
+            } else {
+                if (trim < 0) trim=0
+                if (trim > 40) trim=40
+                lo = int(n * trim / 100) + 1
+                hi = n - int(n * trim / 100)
+                if (hi < lo) { lo=1; hi=n }
+            }
+
+            m=0; s=0
+
+            for (i=lo; i<=hi; i++) { b[++m]=a[i]; s+=a[i] }
+
+            if (m < 1) exit 1
+
+            mean = s / m
+
+            mid = int((m + 1) / 2)
+
+            if (m % 2) p50 = b[mid]
+
+            else p50 = (b[mid] + b[mid + 1]) / 2
+
+            if (p < 1) p=1
+
+            if (p > 99) p=99
+
+            idx = int((m * p + 99) / 100)
+
+            if (idx < 1) idx=1
+
+            if (idx > m) idx=m
+
+            pp = b[idx]
+
+            printf "%.2f %.0f %.0f %d\n", mean, p50, pp, m
+        }
+    '
+
+}
+
+select_fastest_resolver() {
+    _mode="$1"
+    _domains_file="$2"
+
+    _pool="$(pool_get "$_mode")"
+    _count="$(pool_count "$_pool")"
+
+    [ "$_count" -gt 0 ] || return 1
+
+    [ "$_count" -gt 1 ] || {
+        _only_ep="$(pool_nth "$_pool" 1)"
+        RESOLVER="${_only_ep%\#*}"
+        _PORT="${_only_ep##*\#}"
+        FASTEST_SELECTED_ENDPOINT="$_only_ep"
+        FASTEST_SELECTED_MS="0"
+        FASTEST_SELECTED_DOMAIN="(single-endpoint)"
+        FASTEST_SELECTED_TYPE="$_TYPE"
+        return 0
+    }
+
+    probes="${_FASTEST_PROBE_COUNT:-5}"
+
+    is_posint "$probes" || probes=5
+
+    [ "$probes" -ge 1 ] || probes=1
+
+    case "${_FASTEST_PROBE_DOMAIN:-random}" in
+        random)
+            probe_domain="$(sample_domains_from_file "$_domains_file" 1 random 2>/dev/null | awk 'NF{print; exit}' || true)"
+            ;;
+        first|head)
+            probe_domain="$(sample_domains_from_file "$_domains_file" 1 first 2>/dev/null | awk 'NF{print; exit}' || true)"
+            ;;
+        *)
+            probe_domain="${_FASTEST_PROBE_DOMAIN}"
+            ;;
+    esac
+
+    [ -n "$probe_domain" ] || {
+
+        log 1 "fastest strategy failed: no probe domain available"
+
+        return 1
+    }
+
+    probe_type="$(resolve_probe_qtype)"
+
+    bench_root="${TMPDIR:-/tmp}"
+
+    [ -n "$bench_root" ] || bench_root="/tmp"
+
+    bench_dir="$bench_root/fastest-bench.$$.$(now_ms)"
+
+    mkdir -p "$bench_dir" || return 1
+
+    old_output="$_OUTPUT"
+    _OUTPUT="quiet"
+
+    best_ep=""
+    best_ms=""
+    idx=0
+
+    oldifs=$IFS
+    IFS='
+'
+    for ep in $_pool; do
+
+        [ -n "$ep" ] || continue
+
+        idx=$((idx + 1))
+
+        host="${ep%\#*}"
+        port="${ep##*\#}"
+
+        sample_file="$bench_dir/samples.$idx.txt"
+        : > "$sample_file"
+
+        i=1
+
+        while [ "$i" -le "$probes" ]; do
+            d_ms="$(probe_query_latency_ms "$probe_domain" "$probe_type" \
+                "$bench_dir/answers.$idx.txt" "$host" "$port" 2>/dev/null || printf '1\n')"
+            printf '%s\n' "$d_ms" >> "$sample_file"
+            i=$((i + 1))
+        done
+
+        stats_line="$(latency_stats_file "$sample_file" 0 50 edges1 2>/dev/null || true)"
+        mean_ms="$(printf '%s\n' "$stats_line" | awk 'NF{print $1; exit}')"
+
+        case "$mean_ms" in
+            ''|*[!0-9.]*)
+                continue
+                ;;
+        esac
+
+        if [ -z "$best_ep" ]; then
+            best_ep="$ep"
+            best_ms="$mean_ms"
+        else
+
+            if awk -v a="$mean_ms" -v b="$best_ms" 'BEGIN{ exit ((a < b) ? 0 : 1) }'; then
+                best_ep="$ep"
+                best_ms="$mean_ms"
+            fi
+
+        fi
+
+        log 4 "fastest probe ${LIGHT_GREY}${host}#${port}${GREY}: mean=${LIGHT_GREY}${mean_ms}ms"
+
+    done
+
+    IFS=$oldifs
+
+    _OUTPUT="$old_output"
+
+    [ -n "$best_ep" ] || return 1
+
+    case "$_mode" in
+        local)
+            _LOCAL_POOL="$best_ep"
+            _LOCAL="${best_ep%\#*}"
+            ;;
+        remote)
+            _REMOTE_POOL="$best_ep"
+            _REMOTE="${best_ep%\#*}"
+            ;;
+    esac
+
+    RESOLVER="${best_ep%\#*}"
+    _PORT="${best_ep##*\#}"
+
+    FASTEST_SELECTED_ENDPOINT="$best_ep"
+    FASTEST_SELECTED_MS="$best_ms"
+    FASTEST_SELECTED_DOMAIN="$probe_domain"
+    FASTEST_SELECTED_TYPE="$probe_type"
+
+    log 3 "fastest resolver selected: ${LIGHT_GREY}${RESOLVER}#${_PORT}${BLUE} (${LIGHT_GREY}${best_ms}ms${BLUE} trimmed mean)"
+
+    return 0
+}
+
+resolver_targets_for_dispatch() {
+    _mode="$1"
+    _pool="$(pool_get "$_mode")"
+    _count="$(pool_count "$_pool")"
+
+    [ "$_count" -gt 0 ] || return 1
+
+    if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "resolver-pick-fail" ]; then
+        return 1
+    fi
+
+    if [ "$_RESOLVER_STRATEGY" = "parallel" ]; then
+        printf '%s\n' "$_pool" | awk 'NF'
+        return 0
+    fi
+
+    pick_resolver_endpoint "$_mode"
+
+}
+
+compute_dispatch_profile() {
+    _mode="$1"
+    _pool="$(pool_get "$_mode")"
+    _count="$(pool_count "$_pool")"
+
+    [ "$_count" -gt 0 ] || return 1
+
+    DISPATCH_FANOUT=1
+    DISPATCH_TOKEN_COST=1
+    DISPATCH_BURST_LOGICAL="$_BURST"
+    DIG_BATCH_LOGICAL_SIZE_EFFECTIVE="${_DIG_BATCH_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE}"
+
+    case "$DISPATCH_BURST_LOGICAL" in
+        ''|*[!0-9]*|0)
+            DISPATCH_BURST_LOGICAL=1
+            ;;
+    esac
+
+    case "$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE" in
+        ''|*[!0-9]*|0)
+            DIG_BATCH_LOGICAL_SIZE_EFFECTIVE=1
+            ;;
+    esac
+
+    if [ "$_RESOLVER_STRATEGY" = "parallel" ]; then
+        DISPATCH_FANOUT="$_count"
+        DISPATCH_TOKEN_COST="$_count"
+
+        if [ "$_BURST" -lt "$DISPATCH_TOKEN_COST" ]; then
+
+            log 2 "${LIGHT_GREY}_BURST${YELLOW} (${LIGHT_GREY}$_BURST${YELLOW}) is too low for mirrored parallel fanout (${LIGHT_GREY}$DISPATCH_TOKEN_COST${YELLOW}); raising burst minimum"
+
+            _BURST="$DISPATCH_TOKEN_COST"
+            _BURST_EFFECTIVE="$_BURST"
+        fi
+
+        if [ "${_DIG_BATCH:-0}" -eq 1 ] && [ "$_DIG_BATCH_SIZE_EFFECTIVE" -lt "$DISPATCH_TOKEN_COST" ]; then
+
+            log 2 "${LIGHT_GREY}_DIG_BATCH_SIZE_EFFECTIVE${YELLOW} (${LIGHT_GREY}$_DIG_BATCH_SIZE_EFFECTIVE${YELLOW}) is too low for mirrored parallel fanout (${LIGHT_GREY}$DISPATCH_TOKEN_COST${YELLOW}); raising minimum"
+
+            _DIG_BATCH_SIZE_EFFECTIVE="$DISPATCH_TOKEN_COST"
+        fi
+
+        DISPATCH_BURST_LOGICAL=$((_BURST / DISPATCH_TOKEN_COST))
+
+        [ "$DISPATCH_BURST_LOGICAL" -ge 1 ] || DISPATCH_BURST_LOGICAL=1
+
+        DIG_BATCH_LOGICAL_SIZE_EFFECTIVE=$((_DIG_BATCH_SIZE_EFFECTIVE / DISPATCH_TOKEN_COST))
+
+        [ "$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE" -ge 1 ] || DIG_BATCH_LOGICAL_SIZE_EFFECTIVE=1
+
+    fi
+
+    log 4 "dispatch profile: fanout=${LIGHT_GREY}$DISPATCH_FANOUT${GREY} token_cost=${LIGHT_GREY}$DISPATCH_TOKEN_COST${GREY} logical_burst=${LIGHT_GREY}$DISPATCH_BURST_LOGICAL${GREY} logical_batch=${LIGHT_GREY}$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE"
+
+    return 0
+}
+
+pick_resolver_endpoint() {
+    _mode="$1"
+    _pool="$(pool_get "$_mode")"
+    _count="$(pool_count "$_pool")"
+
+    [ "$_count" -gt 0 ] || return 1
+
+    case "$_RESOLVER_STRATEGY" in
+        rr)
+
+            if [ "$_mode" = "local" ]; then
+
+                [ "$_LOCAL_RR_INDEX" -le "$_count" ] || _LOCAL_RR_INDEX=1
+
+                _pick="$(pool_nth "$_pool" "$_LOCAL_RR_INDEX")"
+                _LOCAL_RR_INDEX=$((_LOCAL_RR_INDEX + 1))
+            else
+
+                [ "$_REMOTE_RR_INDEX" -le "$_count" ] || _REMOTE_RR_INDEX=1
+
+                _pick="$(pool_nth "$_pool" "$_REMOTE_RR_INDEX")"
+                _REMOTE_RR_INDEX=$((_REMOTE_RR_INDEX + 1))
+            fi
+
+            ;;
+        fastest)
+            _pick="$(pool_nth "$_pool" 1)"
+            ;;
+        random)
+            _idx="$(rand_int_range 1 "$_count" 2>/dev/null || printf '1\n')"
+            _pick="$(pool_nth "$_pool" "$_idx")"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    [ -n "$_pick" ] || return 1
+
+    printf '%s\n' "$_pick"
+}
+
+validate_pool_for_mode() {
+    _mode="$1"
+    _validator="$2"
+    _pool="$(pool_get "$_mode")"
+
+    [ -n "$_pool" ] || return 1
+
+    oldifs=$IFS
+    IFS='
+'
+    for _ep in $_pool; do
+
+        [ -n "$_ep" ] || continue
+
+        _h="${_ep%\#*}"
+        _p="${_ep##*\#}"
+
+        is_port "$_p" || return 1
+
+        case "$_validator" in
+            local-strict)
+
+                is_valid_local_dns "$_h" || return 1
+
+                ;;
+            dns)
+
+                is_valid_dns "$_h" || return 1
+
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+
+    done
+
+    IFS=$oldifs
+
+    return 0
+}
+
 parse_resolver_cli_arg() {
     _mode="$1"
     _opt="$2"
@@ -699,19 +1288,13 @@ parse_resolver_cli_arg() {
         local)
             SEEN_L=1
 
-            if [ "$_LOCATION_EXPLICIT" -eq 0 ]; then
-                _LOCATION="local"
-                _LOCATION_FORCED=0
-            fi
+            [ "$_LOCATION_EXPLICIT" -eq 1 ] || { _LOCATION="local"; _LOCATION_FORCED=0; }
 
             ;;
         remote)
             SEEN_R=1
 
-            if [ "$_LOCATION_EXPLICIT" -eq 0 ]; then
-                _LOCATION="remote"
-                _LOCATION_FORCED=0
-            fi
+            [ "$_LOCATION_EXPLICIT" -eq 1 ] || { _LOCATION="remote"; _LOCATION_FORCED=0; }
 
             ;;
         *)
@@ -719,23 +1302,54 @@ parse_resolver_cli_arg() {
             ;;
     esac
 
-    parse_dns_opt "$_raw" || {
+    oldifs=$IFS
+    IFS=,
+    # shellcheck disable=SC2086
+    set -- $_raw
+    IFS=$oldifs
 
-        log 1 "invalid ${LIGHT_GREY}${_opt} ${RED}value: ${LIGHT_GREY}${_raw}"
+    [ "$#" -gt 0 ] || set -- "$_raw"
 
-        return 1
-    }
+    for _item in "$@"; do
+        _item="$(printf '%s' "$_item" | awk '{gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}')"
 
-    case "$_mode" in
-        local)
-            _LOCAL="$PARSED_DNS_HOST"
-            ;;
-        remote)
-            _REMOTE="$PARSED_DNS_HOST"
-            ;;
-    esac
+        [ -n "$_item" ] || continue
 
-    [ -n "$PARSED_DNS_PORT" ] && _PORT="$PARSED_DNS_PORT"
+        parse_dns_opt "$_item" || {
+
+            log 1 "invalid ${LIGHT_GREY}${_opt} ${RED}value: ${LIGHT_GREY}${_item}"
+
+            return 1
+        }
+
+        _h="$PARSED_DNS_HOST"
+        _p="${PARSED_DNS_PORT:-$_PORT}"
+
+        is_port "$_p" || {
+
+            log 1 "invalid ${LIGHT_GREY}${_opt} ${RED}port: ${LIGHT_GREY}${_p}"
+
+            return 1
+        }
+
+        case "$_mode" in
+            local)
+                _LOCAL="$_h"
+
+                append_pool_unique local "${_h}#${_p}" || return 1
+
+                ;;
+            remote)
+                _REMOTE="$_h"
+
+                append_pool_unique remote "${_h}#${_p}" || return 1
+
+                ;;
+        esac
+
+        [ -n "$PARSED_DNS_PORT" ] && _PORT="$PARSED_DNS_PORT"
+
+    done
 
     return 0
 }
@@ -794,6 +1408,7 @@ ANSWER_QPS_TOTAL=0
 COMPLETED=0
 COMPLETED_QPS_WINDOW=0
 COMPLETED_QPS_TOTAL=0
+LOGICAL_SENT=0
 
 sum_completed_shards() {
     total=0
@@ -818,30 +1433,41 @@ sum_completed_shards() {
 
 compute_runtime_metrics() {
     sent="${SENT:-0}"
+    logical_sent="${LOGICAL_SENT:-0}"
+
+    case "$logical_sent" in
+        ''|*[!0-9]*)
+            logical_sent=0
+            ;;
+    esac
 
     start_ms="${START_TS:-0}"
     end_ms="${END_MS:-0}"
     last_sent_ms="${LAST_SENT_MS:-0}"
     queries_start="${QUERIES_START:-0}"
 
-    case "$start_ms" in ''|*[!0-9]*)
-        start_ms=0
-        ;;
+    case "$start_ms" in
+        ''|*[!0-9]*)
+            start_ms=0
+            ;;
     esac
     
-    case "$end_ms" in ''|*[!0-9]*)
-        end_ms=0
-        ;;
+    case "$end_ms" in
+        ''|*[!0-9]*)
+            end_ms=0
+            ;;
     esac
     
-    case "$last_sent_ms" in ''|*[!0-9]*)
-        last_sent_ms=0
-        ;;
+    case "$last_sent_ms" in
+        ''|*[!0-9]*)
+            last_sent_ms=0
+            ;;
     esac
     
-    case "$queries_start" in ''|*[!0-9]*)
-        queries_start=0
-        ;;
+    case "$queries_start" in
+        ''|*[!0-9]*)
+            queries_start=0
+            ;;
     esac
 
     [ "$start_ms" -gt 0 ] || start_ms="$SCRIPT_START"
@@ -927,11 +1553,6 @@ EOF
 parse_duration() {
     raw="$1"
 
-    case "$raw" in
-        ''|*[!0-9\ smhdwy]*)
-            ;;
-    esac
-
     if is_nonnegint "$raw"; then
         printf '%s\n' "$raw"
         return 0
@@ -949,6 +1570,7 @@ parse_duration() {
             if (s == "") { ok=0; exit }
 
             while (length(s) > 0) {
+
                 if (s !~ /^[0-9]/) { ok=0; break }
 
                 match(s, /^[0-9]+/)
@@ -1884,6 +2506,8 @@ write_service_unit() {
 
     require_safe_unit_token "LOCK_BASENAME" "$LOCK_BASENAME" || return 1
 
+    require_safe_unit_token "_TIMER_PERIOD" "$TIMER_SERVICE_PERIOD" || return 1
+
     cat > "$out" <<EOF
 [Unit]
 Description=Run $NAME DNS query workload
@@ -1898,12 +2522,15 @@ User=root
 Group=root
 UMask=0027
 Environment=_DIRECTORY=$service_directory
-Environment=_STATUS_ENABLED=$_STATUS_ENABLED
+Environment=_STATUS_ENABLED=1
 Environment=_STATUS_DIR=$service_state_root/status
 Environment=_STATUS_FILE=$service_state_root/status/$STATUS_BASENAME
 Environment=_LOCK_DIR=$service_runtime_root
 Environment=_LOCK_FILE=$service_runtime_root/$LOCK_BASENAME
 Environment=_VERBOSITY=$_VERBOSITY
+Environment=_DRAIN_TIMEOUT_MS=$_DRAIN_TIMEOUT_MS
+Environment=_TIMER_PERIOD=$TIMER_SERVICE_PERIOD
+Environment=LOG_MODE=stderr
 ExecStart=$exec_path
 StandardOutput=journal
 StandardError=journal
@@ -1964,9 +2591,64 @@ write_bash_completion() {
     out="$1"
 
     cat > "$out" <<'EOF'
+_DNdistresS_help_topics() {
+    local bin topics
+
+    bin="$(command -v DNdistresS 2>/dev/null || true)"
+
+    if [ -n "$bin" ]; then
+        topics="$("$bin" --help topics-list 2>/dev/null | awk '
+            /^[a-z][a-z0-9-]*$/ { if (!seen[$0]++) print $0 }
+        ')"
+
+        if [ -z "$topics" ]; then
+            topics="$("$bin" --help topics 2>/dev/null | awk '
+                /^[[:space:]]+General:|^[[:space:]]+Commands:|^[[:space:]]+Options:/ { sect=1; next }
+                /^[[:space:]]+Aliases:/ { sect=0; next }
+                sect && /^[[:space:]]{4}/ {
+
+                    for (i = 1; i <= NF; i++) {
+
+                        if ($i ~ /^[a-z][a-z0-9-]*$/) print $i
+
+                    }
+
+                }
+            ' | awk '!seen[$0]++')"
+        fi
+
+        if [ -n "$topics" ]; then
+            printf '%s\n' "$topics"
+            return 0
+        fi
+
+    fi
+
+    printf '%s\n' \
+        general usage topics topics-list what why info examples description \
+        runtime resolver resolver-strategy domains status environment exit-codes \
+        install uninstall show version help auto-tune batch binary burst \
+        force-burst column custom dig-options dig-options-mode \
+        strict-dig-options directory duration file format local location maximum \
+        force-maximum output port qps random remote seconds top type deny-any \
+        allow-any url verbosity log-mode clock-tick-ms drain-timeout-ms \
+        with-systemd with-bash-completion without-systemd without-bash-completion \
+        full
+}
+
+_DNdistresS_show_topics() {
+    printf '%s\n' w c warranty conditions
+}
+
 _DNdistresS_completion() {
-    local cur prev cmd tok i
-    local has_random=0 has_type=0 has_show_topic=0 has_mode_path=0
+    local cur prev tok i
+    local cmd=""
+    local help_ctx=0
+    local show_ctx=0
+    local show_topic_seen=0
+    local has_random=0
+    local has_type=0
+    local has_mode_path=0
 
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -1974,38 +2656,44 @@ _DNdistresS_completion() {
 
     type compopt >/dev/null 2>&1 && compopt +o default +o bashdefault +o filenames 2>/dev/null || true
 
-    local show_topics="w c warranty conditions"
-
     local common_opts="-h --help -V --verbosity"
-
     local mode_switch_opts="-i --install -u --uninstall -S --show \
         --show-warranty --show-conditions -v --version --full --with-systemd \
         --without-systemd --with-bash-completion --without-bash-completion"
 
     local run_opts="-b -B -c -C -d -D -f -F -l -L -m -o -p -q -r -R -s -t -T \
         -U --allow-any --auto-tune --batch --binary --burst --column --custom --deny-any \
-        --dig-options --dig-options-mode --directory --duration --file --force-burst --force-maximum --format \
-        --local --location --maximum --output --port --qps --random --remote \
-        --seconds --top --type --url"
+        --dig-options --dig-options-mode --directory --duration --file --force-burst \
+        --force-maximum --format --local --location --maximum --output --port --qps \
+        --random --remote --resolver-strategy --seconds --top --type --url"
 
-    for ((i=1; i<COMP_CWORD; i++)); do
+    for ((i = 1; i < COMP_CWORD; i++)); do
         tok="${COMP_WORDS[i]}"
 
         case "$tok" in
+            help|-h|--help)
+                help_ctx=1
+                ;;
             show|-S|--show|--show-warranty|--show-conditions)
+                show_ctx=1
+
                 [[ -z "$cmd" ]] && cmd="show"
+
                 ;;
             install|-i|--install)
+
                 [[ -z "$cmd" ]] && cmd="install"
+
                 ;;
             uninstall|-u|--uninstall)
+
                 [[ -z "$cmd" ]] && cmd="uninstall"
+
                 ;;
             version|-v|--version)
+
                 [[ -z "$cmd" ]] && cmd="version"
-                ;;
-            help|-h|--help)
-                [[ -z "$cmd" ]] && cmd="help"
+
                 ;;
         esac
 
@@ -2022,7 +2710,7 @@ _DNdistresS_completion() {
 
             case "$tok" in
                 w|c|warranty|conditions)
-                    has_show_topic=1
+                    show_topic_seen=1
                     ;;
             esac
 
@@ -2042,7 +2730,14 @@ _DNdistresS_completion() {
 
     done
 
-    if [[ $COMP_CWORD -eq 1 ]]; then
+    if [[ "$help_ctx" -eq 1 ]]; then
+        local topics
+        topics="$(_DNdistresS_help_topics | tr '\n' ' ')"
+        COMPREPLY=( $(compgen -W "$topics" -- "$cur") )
+        return 0
+    fi
+
+    if [[ "$COMP_CWORD" -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$mode_switch_opts $common_opts $run_opts" -- "$cur") )
         return 0
     fi
@@ -2122,6 +2817,10 @@ _DNdistresS_completion() {
             COMPREPLY=( $(compgen -W "1.1.1.1 1.0.0.1 8.8.4.4 8.8.8.8 2001:4860:4860::8888 2606:4700:4700::1111" -- "$cur") )
             return 0
             ;;
+        --resolver-strategy)
+            COMPREPLY=( $(compgen -W "rr random fastest parallel" -- "$cur") )
+            return 0
+            ;;
         -s|--seconds)
             COMPREPLY=( $(compgen -W "0 300 3600 86400 604800" -- "$cur") )
             return 0
@@ -2159,7 +2858,7 @@ _DNdistresS_completion() {
             return 0
             ;;
         -S|--show)
-            COMPREPLY=( $(compgen -W "$show_topics" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$(_DNdistresS_show_topics | tr '\n' ' ')" -- "$cur") )
             return 0
             ;;
     esac
@@ -2167,7 +2866,7 @@ _DNdistresS_completion() {
     case "$cmd" in
         show)
 
-            if [[ $has_show_topic -eq 1 ]]; then
+            if [[ "$show_topic_seen" -eq 1 ]]; then
                 COMPREPLY=( $(compgen -W "$common_opts" -- "$cur") )
                 return 0
             fi
@@ -2175,14 +2874,14 @@ _DNdistresS_completion() {
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "$common_opts -S --show --show-warranty --show-conditions" -- "$cur") )
             else
-                COMPREPLY=( $(compgen -W "$show_topics" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$(_DNdistresS_show_topics | tr '\n' ' ')" -- "$cur") )
             fi
 
             return 0
             ;;
         install)
 
-            if [[ $has_mode_path -eq 0 ]]; then
+            if [[ "$has_mode_path" -eq 0 ]]; then
 
                 if [[ "$cur" == -* ]]; then
                     COMPREPLY=( $(compgen -W "$common_opts --full --with-systemd --without-systemd --with-bash-completion --without-bash-completion" -- "$cur") )
@@ -2198,7 +2897,7 @@ _DNdistresS_completion() {
             ;;
         uninstall)
 
-            if [[ $has_mode_path -eq 0 ]]; then
+            if [[ "$has_mode_path" -eq 0 ]]; then
 
                 if [[ "$cur" == -* ]]; then
                     COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion" -- "$cur") )
@@ -2218,12 +2917,12 @@ _DNdistresS_completion() {
             ;;
     esac
 
-    if [[ $has_random -eq 1 ]]; then
+    if [[ "$has_random" -eq 1 ]]; then
         run_opts="${run_opts// -T / }"
         run_opts="${run_opts// --type / }"
     fi
 
-    if [[ $has_type -eq 1 ]]; then
+    if [[ "$has_type" -eq 1 ]]; then
         run_opts="${run_opts// -R / }"
         run_opts="${run_opts// --random / }"
     fi
@@ -2793,6 +3492,7 @@ fetch_source() {
 extract_domains() {
 
     awk -F',' -v fmt="$_FORMAT" -v col="$_COLUMN" '
+
         function norm(x) {
             gsub(/\r/, "", x)
             sub(/^[[:space:]]+/, "", x)
@@ -2803,6 +3503,7 @@ extract_domains() {
         }
 
         function is_domain(x, n, i, lab) {
+
             if (x == "") return 0
 
             if (length(x) > 253) return 0
@@ -2887,6 +3588,7 @@ extract_domains() {
 extract_custom_domains() {
 
     awk '
+
         function norm(x) {
             gsub(/\r/, "", x)
             sub(/[[:space:]]*#.*$/, "", x)
@@ -3145,19 +3847,21 @@ query_one() {
     d="$1"
     qtype="${2:-$_TYPE}"
     out_file="${3:-$ANSWERS_FILE}"
+    resolver_host="${4:-$RESOLVER}"
+    resolver_port="${5:-$_PORT}"
 
-    log 5 "query: domain=${LIGHT_GREY}$d ${GREY}type=${LIGHT_GREY}$qtype"
+    log 5 "query: domain=${LIGHT_GREY}$d ${GREY}type=${LIGHT_GREY}$qtype ${GREY}resolver=${LIGHT_GREY}${resolver_host}#${resolver_port}"
 
     case "$_BINARY" in
         dig)
-            # shellcheck disable=SC2086
 
-            run_query_capture_answers "$out_file" dig @"$RESOLVER" -p "$_PORT" "$d" "$qtype" $DIG_OPTIONS_EFFECTIVE
+            # shellcheck disable=SC2086
+            run_query_capture_answers "$out_file" dig @"$resolver_host" -p "$resolver_port" "$d" "$qtype" $DIG_OPTIONS_EFFECTIVE
 
             ;;
         nslookup)
 
-            nslookup -port="$_PORT" -type="$qtype" "$d" "$RESOLVER" 2>/dev/null | \
+            nslookup -port="$resolver_port" -type="$qtype" "$d" "$resolver_host" 2>/dev/null | \
 
             while IFS= read -r line || [ -n "$line" ]; do
 
@@ -3195,11 +3899,13 @@ query_one() {
 query_dig_batch_file() {
     batch_file="$1"
     out_file="${2:-$ANSWERS_FILE}"
+    resolver_host="${3:-$RESOLVER}"
+    resolver_port="${4:-$_PORT}"
 
     [ -s "$batch_file" ] || return 0
 
     # shellcheck disable=SC2086
-    run_query_capture_answers "$out_file" dig @"$RESOLVER" -p "$_PORT" -f "$batch_file" $DIG_OPTIONS_EFFECTIVE
+    run_query_capture_answers "$out_file" dig @"$resolver_host" -p "$resolver_port" -f "$batch_file" $DIG_OPTIONS_EFFECTIVE
 
     return 0
 }
@@ -3219,6 +3925,10 @@ WORKER_EVENTS_FILE=""
 enqueue_job() {
 
     [ "$WORKER_COUNT" -gt 0 ] || return 1
+
+    if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "queue-fail" ]; then
+        return 1
+    fi
 
     fifo="$TMPDIR/queue.$WORKER_NEXT.fifo"
     printf '%s\n' "$1" > "$fifo" || return 1
@@ -3322,14 +4032,27 @@ start_worker_pool() {
                 [ "$job" = "$WORKER_STOP_TOKEN" ] && break
 
                 case "$job" in
+                    "${DIG_BATCH_PREFIX}"'|'*'|'*'|'*'|'*)
+                        payload=${job#*|}
+                        batch_count=${payload%%|*}
+                        payload=${payload#*|}
+                        batch_file=${payload%%|*}
+                        payload=${payload#*|}
+                        batch_host=${payload%%|*}
+                        batch_port=${payload#*|}
+                        ;;
                     "${DIG_BATCH_PREFIX}"'|'*'|'*)
                         payload=${job#*|}
                         batch_count=${payload%%|*}
                         batch_file=${payload#*|}
+                        batch_host="$RESOLVER"
+                        batch_port="$_PORT"
                         ;;
                     "${DIG_BATCH_PREFIX}"'|'*)
                         batch_file=${job#*|}
                         batch_count=0
+                        batch_host="$RESOLVER"
+                        batch_port="$_PORT"
                         ;;
                 esac
 
@@ -3346,7 +4069,7 @@ start_worker_pool() {
 
                         worker_event_mark "+"
 
-                        query_dig_batch_file "$batch_file" "$shard" || true
+                        query_dig_batch_file "$batch_file" "$shard" "$batch_host" "$batch_port" || true
 
                         rm -f "$batch_file" 2>/dev/null || true
 
@@ -3358,13 +4081,25 @@ start_worker_pool() {
                 esac
 
                 case "$job" in
+                    *'|'*'|'*'|'*)
+                        qtype=${job%%|*}
+                        rem=${job#*|}
+                        d=${rem%%|*}
+                        rem=${rem#*|}
+                        job_resolver=${rem%%|*}
+                        job_port=${rem#*|}
+                        ;;
                     *'|'*)
                         qtype=${job%%|*}
                         d=${job#*|}
+                        job_resolver="$RESOLVER"
+                        job_port="$_PORT"
                         ;;
                     *)
                         qtype="$_TYPE"
                         d="$job"
+                        job_resolver="$RESOLVER"
+                        job_port="$_PORT"
                         ;;
                 esac
 
@@ -3372,7 +4107,7 @@ start_worker_pool() {
 
                 worker_event_mark "+"
 
-                query_one "$d" "$qtype" "$shard" || true
+                query_one "$d" "$qtype" "$shard" "$job_resolver" "$job_port" || true
 
                 worker_event_mark "-"
 
@@ -3423,11 +4158,15 @@ finalise_worker_metrics() {
             BEGIN { cur=0; peak=0 }
             $1=="+" {
                 cur++
+
                 if (cur > peak) peak=cur
+
                 next
             }
             $1=="-" {
+
                 if (cur > 0) cur--
+
                 next
             }
             END { print peak+0 }
@@ -3454,7 +4193,7 @@ WITH_BASH_COMPLETION_SEEN=0
 FULL_SEEN=0
 
 print_version() {
-    printf '%s\n' "$NAME v${VERSION} $BRANCH $RELEASE_DATE"
+    printf '%s\n' "$NAME v${VERSION}${VERSION_PICO_STRING} $BRANCH $RELEASE_DATE"
 }
 
 print_start_notice() {
@@ -3542,7 +4281,8 @@ is_cli_option_token() {
         -s|s|--seconds|seconds|-t|t|--top|top|-T|T|--type|type|\
         -u|u|--uninstall|uninstall|--with-systemd|--without-systemd|\
         --with-bash-completion|--without-bash-completion|-U|U|--url|url|\
-        -V|V|--verbosity|verbosity|--dig-options|dig-options|--dig-options-mode|dig-options-mode)
+        -V|V|--verbosity|verbosity|--dig-options|dig-options|--dig-options-mode|\
+        dig-options-mode|--resolver-strategy|resolver-strategy)
             return 0
             ;;
         *)
@@ -3552,14 +4292,26 @@ is_cli_option_token() {
 
 }
 
+help_topics_list() {
+    printf '%s\n' \
+        general usage topics topics-list what why info examples description \
+        runtime resolver resolver-strategy domains status environment \
+        exit-codes install uninstall show version help auto-tune batch binary \
+        burst force-burst column custom dig-options dig-options-mode \
+        strict-dig-options directory duration file format local location \
+        maximum force-maximum output port qps random remote seconds top type \
+        deny-any allow-any url verbosity log-mode clock-tick-ms \
+        drain-timeout-ms full with-systemd with-bash-completion
+}
+
 help_topics() {
 
     printf '%s\n' \
         "Help topics:" \
         "" \
         "  General:" \
-        "    general usage topics info description runtime resolver domains status" \
-        "    environment exit-codes" \
+        "    general usage topics what why info examples description runtime" \
+        "    resolver domains status environment exit-codes" \
         "" \
         "  Commands:" \
         "    install uninstall show version help" \
@@ -3568,15 +4320,19 @@ help_topics() {
         "    auto-tune batch binary burst force-burst column custom dig-options" \
         "    dig-options-mode strict-dig-options directory duration file format" \
         "    local location maximum force-maximum output port qps random remote" \
-        "    seconds top type deny-any allow-any url verbosity log-mode" \
-        "    clock-tick-ms drain-timeout-ms with-systemd with-bash-completion" \
+        "    resolver-strategy seconds top type deny-any allow-any url verbosity" \
+        "    log-mode clock-tick-ms drain-timeout-ms with-systemd with-bash-completion" \
         "    full" \
         "" \
-        "  Aliases accepted:" \
-        "    -i/--install, -u/--uninstall, -v/--version, -h/--help, -S/--show," \
-        "    --show-warranty, --show-conditions, --force-maximum," \
-        "    -b/-B/-c/-C/-d/-D/-f/-F/-l/-L/-m/-o/-p/-q/-R/-r/-s/-t/-T/-U/-V"
-
+        "  Aliases:" \
+        "    -h/--help, -v/--version, -S/--show, -b/--binary, -B/--burst, -c/--column" \
+        "    -C/--custom, -d/--directory, -D/--duration, -f/--file, -F/--format," \
+        "    -i/--install, -l/--local, -L/--location, -m/--maximum, -o/--output," \
+        "    -p/--port, -q/--qps, -r/--remote, -s/--seconds, -t/--top, -T/--type," \
+        "    -u/--uninstall, -U/--url, -V/--verbosity" \
+        "" \
+        "  Machine-readable:" \
+        "    --help topics-list"
 }
 
 collect_script_metrics() {
@@ -3665,10 +4421,10 @@ collect_script_metrics() {
         }
 
         function is_shell_keyword(n) {
-            return (n=="if" || n=="then" || n=="elif" || n=="else" || n=="fi" || \
-                    n=="for" || n=="while" || n=="until" || n=="do" || n=="done" || \
-                    n=="case" || n=="esac" || n=="in" || n=="select" || \
-                    n=="function" || n=="time")
+            return (n=="if" || n=="then" || n=="elif" || n=="else" || \
+                    n=="fi" || n=="for" || n=="while" || n=="until" || \
+                    n=="do" || n=="done" || n=="case" || n=="esac" || \
+                    n=="in" || n=="select" || n=="function" || n=="time")
         }
 
         function fmt_pct(x, s) {
@@ -3752,11 +4508,18 @@ collect_script_metrics() {
             if (length(line) > max_line_len) max_line_len=length(line)
 
             if (line ~ /^[[:space:]]*$/) blank++
+
             else nonblank++
 
-            is_shebang   = (NR == 1 && line ~ /^#!/)
-            is_directive = (!is_shebang && line ~ /^[[:space:]]*#[[:space:]]*shellcheck([[:space:]]|$)/)
-            is_comment   = (!is_shebang && !is_directive && line ~ /^[[:space:]]*#/)
+            is_shebang = (NR == 1 && line ~ /^#!/)
+
+            is_directive = 0
+
+            if (!is_shebang && line ~ /^[[:space:]]*#[[:space:]]*shellcheck([[:space:]]|$)/) {
+                is_directive = 1
+            }
+
+            is_comment = (!is_shebang && !is_directive && line ~ /^[[:space:]]*#/)
 
             if (is_directive) directives++
 
@@ -3858,9 +4621,11 @@ collect_script_metrics() {
         }
 
         END {
+
             while (fn_sp > 0) pop_fn()
 
             vars=0
+
             for (k in seen) vars++
 
             total = nonblank + blank
@@ -3868,50 +4633,96 @@ collect_script_metrics() {
             c_pct = (nonblank > 0 ? (comments * 100.0) / nonblank : 0)
             c_pct_disp = fmt_pct(c_pct)
             avg_arms = (case_count > 0 ? arms / case_count : 0)
-            total_loc_ratio = (nonblank > 0 ? total / nonblank : 0)
+            nonblank_pct = (total > 0 ? (nonblank * 100.0) / total : 0)
+            sloc_pct = (total > 0 ? (sloc * 100.0) / total : 0)
+            blank_pct = (total > 0 ? (blank * 100.0) / total : 0)
+            nonblank_pct_disp = fmt_pct(nonblank_pct)
+            sloc_pct_disp = fmt_pct(sloc_pct)
+            blank_pct_disp = fmt_pct(blank_pct)
             avg_nonws_per_sloc = (sloc > 0 ? char_nonws / sloc : 0)
+            nonblank_x = (nonblank > 0 ? sprintf("%.2fx", total / nonblank) : "n/a")
+            sloc_x = (sloc > 0 ? sprintf("%.2fx", total / sloc) : "n/a")
+            blank_x = (blank > 0 ? sprintf("%.2fx", total / blank) : "n/a")
+            comment_x = (comments > 0 ? sprintf("%.2fx", nonblank / comments) : "n/a")
 
             printf "\
 Functions:             %d\n\
-Max function LOC:      %d (%s())\n\
+Max function LOC:      %d\n\
+  (%s())\n\
+\n\
 Average function LOC:  %.2f\n\
 Functions >=50 LOC:    %d\n\
 Functions >=100 LOC:   %d\n\
 Functions >=1000 LOC:  %d\n\
-Function nesting:      %d (maximum depth)\n\
-Maximum depth:         %d (maximum brace nesting depth)\n\
+Function nesting:      %d\n\
+  (maximum depth)\n\
+\n\
+Maximum depth:         %d\n\
+  (maximum brace nesting depth)\n\
 \n\
 Total:                 %d (all lines)\n\
 Non-blank:             %d\n\
-SLOC:                  %d (excludes blank/comment/shebang/directive)\n\
-LOC ratio:             %.2f (%d/%d total/non-blank)\n\
+SLOC:                  %d\n\
+  (excludes blank/comment/shebang/directive)\n\
+\n\
+Non-blank ratio:       %s%%\n\
+                       %d/%d non-blank/total\n\
+                       %s total/non-blank\n\
+SLOC ratio:            %s%%\n\
+                       %d/%d sloc/total\n\
+                       %s total/sloc\n\
+Blank ratio:           %s%%\n\
+                       %d/%d blank/total\n\
+                       %s total/blank\n\
 Blank:                 %d\n\
-Characters:            %d (raw)\n\
+Characters:            %d\n\
 Non-whitespace chars:  %d\n\
-Avg chars/SLOC:        %.2f (non-whitespace)\n\
+Avg chars/SLOC:        %.2f\n\
+  (non-whitespace)\n\
+\n\
 Longest line:          %d\n\
 \n\
-Comments:              %d (excludes shebang + shellcheck directives)\n\
-Shellcheck directives: %d\n\
-Comment ratio:         %s%% (%d/%d regular comments/non-blank lines)\n\
+Comments:              %d\n\
+  (excludes shebang)\n\
 \n\
-Variables:             %d (unique shell-style variables seen)\n\
+Shellcheck directives: %d\n\
+Comment ratio:         %s%%\n\
+                       %d/%d comments/non-blank\n\
+                       %s non-blank/comments\n\
+\n\
+Variables:             %d\n\
+  (unique shell-style variables seen)\n\
+\n\
 If/Elif/Else blocks:   %d\n\
 Case statements:       %d\n\
-Average case arms:     %.2f (;; per case statement)\n\
-Loops:                 %d (for/while/until/select starts)\n\
-Pipes:                 %d (| usage)\n\
-Subshells:             %d (\\$(...) usage)\n\
-Heredocs:              %d (<< usage)\n\
-Sourcing:              %d (. or source)\n\
+Average case arms:     %.2f\n\
+  (;; per case statement)\n\
+\n\
+Loops:                 %d\n\
+  (for/while/until/select starts)\n\
+\n\
+Pipes:                 %d\n\
+  (| usage)\n\
+\n\
+Subshells:             %d\n\
+  (\\$(...) usage)\n\
+\n\
+Heredocs:              %d\n\
+  (<< usage)\n\
+\n\
+Sourcing:              %d\n\
+  (. or source)\n\
+\n\
 Traps:                 %d\n\
 Exits:                 %d\n", \
-fn_count+0, fn_max+0, (max_fn_name != "" ? max_fn_name : "unknown"), avg_fn, fn_50+0, fn_100+0, fn_1000+0, \
-max_fn_nesting+0, max_brace_depth+0, \
-total+0, nonblank+0, sloc+0, total_loc_ratio, total+0, nonblank+0, blank+0, \
-char_total+0, char_nonws+0, avg_nonws_per_sloc, max_line_len+0, \
-comments+0, directives+0, c_pct_disp, comments+0, nonblank+0, vars+0, ifs+0, case_count+0, avg_arms, \
-loop_count+0, pipes+0, subshells+0, heredocs+0, sourcing+0, traps+0, exits+0
+fn_count+0, fn_max+0, (max_fn_name != "" ? max_fn_name : "unknown"), avg_fn, \
+fn_50+0, fn_100+0, fn_1000+0, max_fn_nesting+0, max_brace_depth+0, total+0, \
+nonblank+0, sloc+0, nonblank_pct_disp, nonblank+0, total+0, nonblank_x, \
+sloc_pct_disp, sloc+0, total+0, sloc_x, blank_pct_disp, blank+0, total+0, \
+blank_x, blank+0, char_total+0, char_nonws+0, avg_nonws_per_sloc, \
+max_line_len+0, comments+0, directives+0, c_pct_disp, comments+0, \
+nonblank+0, comment_x, vars+0, ifs+0, case_count+0, avg_arms, loop_count+0, \
+pipes+0, subshells+0, heredocs+0, sourcing+0, traps+0, exits+0
         }
     ' "$0" 2>/dev/null || printf '%s\n' \
         "Functions:             $UNKNOWN_METRIC" \
@@ -3926,7 +4737,9 @@ loop_count+0, pipes+0, subshells+0, heredocs+0, sourcing+0, traps+0, exits+0
         "Total:                 $UNKNOWN_METRIC" \
         "Non-blank:             $UNKNOWN_METRIC" \
         "SLOC:                  $UNKNOWN_METRIC" \
-        "LOC ratio:             $UNKNOWN_METRIC" \
+        "Non-blank ratio:       $UNKNOWN_METRIC" \
+        "SLOC ratio:            $UNKNOWN_METRIC" \
+        "Blank ratio:           $UNKNOWN_METRIC" \
         "Blank:                 $UNKNOWN_METRIC" \
         "Characters:            $UNKNOWN_METRIC" \
         "Non-whitespace chars:  $UNKNOWN_METRIC" \
@@ -3963,24 +4776,32 @@ usage() {
             s    = syn
 
             while (length(s) > 0) {
+
                 if (substr(s,1,1) != "[") break
+
                 depth = 0
                 tok = ""
+
                 for (i = 1; i <= length(s); i++) {
                     c = substr(s, i, 1)
                     tok = tok c
+
                     if (c == "[") depth++
+
                     else if (c == "]") { depth--; if (depth == 0) break }
                 }
+
                 s = substr(s, length(tok) + 1)
                 sub(/^[[:space:]]+/, "", s)
                 cand = (line == head) ? line tok : line " " tok
+
                 if (length(cand) + 2 > cols) {
                     printf "%s \\\n", line
                     line = ind tok
                 } else {
                     line = cand
                 }
+
             }
 
             print line
@@ -4015,6 +4836,7 @@ Topic examples:
 
 Tip:
   Run '${0##*/} --help topics' to list all available topics.
+  For scripting/completion, use '${0##*/} --help topics-list'.
 EOF
 
 }
@@ -4074,6 +4896,46 @@ parse_top_opt() {
     return 0
 }
 
+help_topic_what_body() {
+
+    cat <<EOF
+DNdistresS is a controlled DNS workload generator.
+
+It repeatedly queries domains with configurable rate, burst, concurrency
+runtime, resolver target, query type, source lists, and caching behaviour.
+
+It makes DNS traffic on purpose, in ways you can shape.
+
+It can make a lot of it, a little bit of it, or a very specific amount of it.
+EOF
+
+}
+
+help_topic_why_body() {
+
+    cat <<EOF
+DNdistresS exists to answer a question that no one asked:
+
+"What if I wanted to poke and prod my DNS servers any which way I wanted, but
+for some reason all I have is a POSIX shell, a handful of built-ins, and a few
+common utilities?"
+
+Use it for cache priming, baseline and stress comparison, change validation
+reproducible resolver/network tests, interrogation, and automation whenever a
+repeatable DNS workload is desired.
+
+DNdistresS generates predictable domain name server pressure, helping to find
+limitations before they find you, and to validate that changes have the
+intended effect.
+EOF
+
+}
+
+help_topic_header() {
+    _topic_name="${1:-general}"
+    printf '%b\n\n' "Topic: ${BOLD}${_topic_name}${NONE}"
+}
+
 show_help_topic() {
     topic="${1:-general}"
 
@@ -4088,15 +4950,51 @@ show_help_topic() {
             help_topics
 
             ;;
+        topics-list)
+
+            help_topics_list
+
+            ;;
+        what)
+
+            help_topic_header "what"
+
+            help_topic_what_body
+
+            printf '\n%s' "See also:" \
+                "  --help why" \
+                "  --help info" \
+                "  --help examples" \
+                "  --help description"
+            ;;
+        why)
+
+            help_topic_header "why"
+
+            help_topic_why_body
+
+            printf '\n%s' "See also:" \
+                "  --help what" \
+                "  --help info" \
+                "  --help examples" \
+                "  --help description"
+            ;;
         info)
             _METRICS="$(collect_script_metrics)"
+            _SCRIPT_BLOCK=""
 
-            printf '%b\n\n' "Topic: ${BOLD}info${NONE}"
+            if [ "$SCRIPT_NAME" != "$NAME" ]; then
+                _SCRIPT_BLOCK="Script:                $SCRIPT_NAME
+
+"
+            fi
+
+            help_topic_header "info"
 
             cat <<EOF
 Name:                  $NAME
 
-Version:               $VERSION
+Version:               ${VERSION}${VERSION_PICO_STRING}
 Branch:                $BRANCH
 
 Release date:          $RELEASE_DATE
@@ -4106,7 +5004,11 @@ License:               $LICENSE
 Contact:               $CONTACT
 Copyright:             $COPYRIGHT_YEAR $AUTHOR_NAME
 
-Script:                $SCRIPT_NAME
+${_SCRIPT_BLOCK}Though I strive for accuracy, the following metrics are generated by a
+function in the script parsing the script itself, and may therefore be
+inaccurate or incomplete.
+
+It is also entirely possible that I just suck at doing things.
 
 $_METRICS
 
@@ -4115,9 +5017,129 @@ Run '${0##*/} --help description' for technical detail.
 EOF
 
             ;;
+        examples)
+
+            help_topic_header "examples"
+
+            cat <<'EOF'
+Quick start:
+
+  # Download the raw script and make it executable.
+  curl -fsSL 'https://raw.githubusercontent.com/saint-lascivious/DNdistresS/master/DNdistresS' -o DNdistresS && chmod +x DNdistresS
+
+  # Same same, but wget flavoured.
+  wget -qO DNdistresS 'https://raw.githubusercontent.com/saint-lascivious/DNdistresS/master/DNdistresS' && chmod +x DNdistresS
+
+  # Local resolver, fixed RR type, quiet output.
+  DNdistresS \
+    --location local \
+    --local 127.0.0.1 \
+    --type A \
+    --qps 32 \
+    --burst 8 \
+    --maximum 4 \
+    --duration 60 \
+    --output quiet
+
+  # Remote resolver with an explicit port and a modest runtime.
+  DNdistresS \
+    --location remote \
+    --remote 1.1.1.1#53 \
+    --type AAAA \
+    --qps 64 \
+    --burst 16 \
+    --duration 5m
+
+  # Multiple local resolvers, round-robin strategy (default).
+  DNdistresS \
+    --location local \
+    --local 127.0.0.1,127.0.0.2 \
+    --resolver-strategy rr \
+    --qps 64 \
+    --burst 16 \
+    --duration 3m
+
+  # Multiple remote resolvers, random strategy.
+  DNdistresS \
+    --location remote \
+    --remote 1.1.1.1#53,8.8.8.8#53,9.9.9.9#53 \
+    --resolver-strategy random \
+    --qps 96 \
+    --burst 24 \
+    --duration 5m
+
+  # Mixed repeated --remote flags with IPv6 and explicit ports.
+  DNdistresS \
+    --location remote \
+    --remote 1.1.1.1#53 \
+    --remote '[2606:4700:4700::1111]:53' \
+    --remote '[2001:4860:4860::8888]:53' \
+    --resolver-strategy rr \
+    --type AAAA \
+    --qps 64 \
+    --duration 4m
+
+  # Parallel fanout across all active remote resolvers (advanced).
+  # Mirrors each logical query to every resolver while enforcing a global
+  # backend QPS/burst/batch budget.
+  DNdistresS \
+    --location remote \
+    --remote 1.1.1.1,8.8.8.8,9.9.9.9 \
+    --resolver-strategy parallel \
+    --qps 32 \
+    --burst 8 \
+    --maximum 8 \
+    --duration 2m
+
+  # Read from a local file instead of downloading a source.
+  DNdistresS \
+    --file ./domains.txt \
+    --format plain \
+    --top 1000 \
+    --output answer
+
+  # dig backend with custom dig options and batching.
+  DNdistresS \
+    --binary dig \
+    --dig-options '+time=2 +tries=1 +retry=0 +notcp +ignore' \
+    --dig-options-mode append \
+    --batch 16 \
+    --qps 128 \
+    --burst 32
+
+  # Random RR types with auto-tuning.
+  DNdistresS \
+    --random \
+    --auto-tune \
+    --allow-any \
+    --location auto \
+    --qps 128 \
+    --duration 10m \
+    --output answer
+
+  # Install everything in one go.
+  DNdistresS install /usr/local/bin --full
+
+  # IPv6 resolver forms.
+  DNdistresS --local ::1 --location local
+  DNdistresS --remote '[2001:4860:4860::8888]:53' --location remote
+
+  # Top filtering with multiple patterns.
+  DNdistresS --top 5000 .com .net .org
+  DNdistresS --top 1000 ||google.com
+  DNdistresS --top 2000 ^cloud
+
+Notes:
+  - Use --help runtime for query pacing details.
+  - Use --help dig-options for dig-specific flags.
+  - Use --help auto-tune for warmup and estimation algorithm and behaviour.
+  - Use --help top for filter syntax.
+EOF
+
+            ;;
         description)
 
-            printf '%b\n\n' "Topic: ${BOLD}description${NONE}"
+            help_topic_header "description"
 
             cat <<EOF
 $NAME continuously (or time-bounded) sends DNS a configurable volume of 
@@ -4138,12 +5160,18 @@ Key properties:
 
 $NAME is an impractically complex resolver workload tool for controlled DNS
 traffic generation.
+
+See also:
+  --help what
+  --help why
+  --help info
+  --help examples
 EOF
 
             ;;
         runtime)
 
-            printf '%b\n\n' "Topic: ${BOLD}runtime${NONE}"
+            help_topic_header "runtime"
 
             cat <<EOF
 Data path:
@@ -4183,14 +5211,15 @@ EOF
             ;;
         resolver)
 
-            printf '%b\n\n' "Topic: ${BOLD}resolver${NONE}"
+            help_topic_header "resolver"
 
             cat <<EOF
 Resolver controls:
   -L/--location     auto|local|remote
-  -l/--local        local resolver address
-  -r/--remote       remote resolver address
+  -l/--local        local resolver address (single or comma-separated list)
+  -r/--remote       remote resolver address (single or comma-separated list)
   -p/--port         DNS port (1..65535)
+  --resolver-strategy rr|random|fastest|parallel
 
 Address forms accepted by -l/-r:
   IPv4
@@ -4198,17 +5227,13 @@ Address forms accepted by -l/-r:
   host#port
   [ipv6]:port
 
-Location modes:
-  auto    default behaviour (best-effort selection/validation)
-  local   force local resolver semantics
-  remote  force remote resolver semantics
-
-Notes:
-  --location is intended for advanced testing/override scenarios.
-  -l and -r may be supplied together only when --location is explicitly
-  set to local or remote.
+Multi-endpoint:
+  You may supply multiple resolver endpoints via repeated -l/-r and/or
+  comma-separated values. Endpoints are stored as host+port entries and
+  selected per dispatched query according to --resolver-strategy.
 
 See also:
+  --help resolver-strategy
   --help location
   --help local
   --help remote
@@ -4216,9 +5241,50 @@ See also:
 EOF
 
             ;;
+        resolver-strategy)
+
+            help_topic_header "resolver-strategy"
+
+            cat <<EOF
+Meaning:
+  Selects how resolver endpoints are chosen from the active resolver pool.
+
+Flag:
+  --resolver-strategy MODE
+  --resolver-strategy=MODE
+
+Values:
+  rr        round-robin endpoint selection (default)
+  random    random endpoint selection
+  fastest   preflight benchmark, pick fastest endpoint, then pin to it
+  parallel  mirrored fanout to all endpoints per logical dispatch
+
+fastest details:
+  - Probes one domain from the active domain set (default: random).
+  - Sends N probes per endpoint (_FASTEST_PROBE_COUNT, default 5).
+  - Uses trimmed mean latency (drops min/max when N>=3).
+  - Lowest trimmed mean wins.
+
+Notes:
+  - qps/burst/max scheduling semantics are preserved.
+  - In parallel mode, each logical query is mirrored to each endpoint.
+  - Global backend budgets are enforced by charging one token per endpoint
+    per logical query.
+  - Effective logical admission rate in parallel is approximately:
+      floor(_QPS / endpoint_count)
+
+See also:
+  --help resolver
+  --help location
+  --help qps
+  --help burst
+  --help maximum
+EOF
+
+            ;;
         domains)
 
-            printf '%b\n\n' "Topic: ${BOLD}domains${NONE}"
+            help_topic_header "domains"
 
             cat <<EOF
 Domain parsing/validation policy:
@@ -4251,12 +5317,16 @@ EOF
             top_filters_disp="${_TOP_FILTERS:-"(empty)"}"
             burst_effective_disp="${_BURST_EFFECTIVE:-$_BURST}"
             dig_batch_effective_disp="${_DIG_BATCH_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE}"
+            dig_batch_logical_effective_disp="${DIG_BATCH_LOGICAL_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE_EFFECTIVE}"
+            dispatch_fanout_disp="${DISPATCH_FANOUT:-1}"
+            dispatch_token_cost_disp="${DISPATCH_TOKEN_COST:-1}"
+            dispatch_burst_logical_disp="${DISPATCH_BURST_LOGICAL:-$_BURST}"
             log_mode_disp="${LOG_MODE:-auto}"
             log_tag_disp="${LOG_TAG:-${0##*/}}"
             timer_period_disp="${_TIMER_PERIOD:-"(auto-detect)"}"
             tmpdir_disp="${TMPDIR:-/tmp}"
 
-            printf '%b\n\n' "Topic: ${BOLD}environment${NONE}"
+            help_topic_header "environment"
 
             cat <<EOF
 User-facing switches / env vars:
@@ -4299,6 +5369,7 @@ User-facing switches / env vars:
   _DIG_BATCH                --batch       $_DIG_BATCH
   _DIG_BATCH_SIZE           --batch       $_DIG_BATCH_SIZE
   _DIG_BATCH_SIZE_EFFECTIVE               $dig_batch_effective_disp
+  DIG_BATCH_LOGICAL_SIZE_EFFECTIVE        $dig_batch_logical_effective_disp
 
   _LOCATION          -L, --location $_LOCATION
   _LOCATION_FORCED                  $_LOCATION_FORCED
@@ -4307,6 +5378,14 @@ User-facing switches / env vars:
   _LOCAL  -l, --local  $_LOCAL
   _REMOTE -r, --remote $remote_disp
   _PORT   -p, --port   $_PORT
+  _RESOLVER_STRATEGY  --resolver-strategy $_RESOLVER_STRATEGY
+  _FASTEST_PROBE_COUNT              $_FASTEST_PROBE_COUNT
+  _FASTEST_PROBE_DOMAIN             $_FASTEST_PROBE_DOMAIN
+  _LOCAL_POOL                       ${_LOCAL_POOL:-"(derived from -l/--local)"}
+  _REMOTE_POOL                      ${_REMOTE_POOL:-"(derived from -r/--remote)"}
+  DISPATCH_FANOUT                   $dispatch_fanout_disp
+  DISPATCH_TOKEN_COST               $dispatch_token_cost_disp
+  DISPATCH_BURST_LOGICAL            $dispatch_burst_logical_disp
 
   _FILE        -f, --file      $file_disp
   _URL         -U, --url       $_URL
@@ -4345,6 +5424,7 @@ Runtime / internal:
   _AUTO_TUNE_SAMPLES_MIN/MAX are optional.
   _BURST_EFFECTIVE is derived from _BURST.
   _DIG_BATCH_SIZE_EFFECTIVE is derived from _DIG_BATCH_SIZE and _BURST.
+  DIG_BATCH_LOGICAL_SIZE_EFFECTIVE is derived from fanout-aware batching.
 
 Service / install support:
   SERVICE_DIR            $SERVICE_DIR
@@ -4361,12 +5441,13 @@ Runtime counters:
   BURST_TRIGGERED         ${BURST_TRIGGERED:-0}
   PEAK_CONCURRENT_WORKERS ${PEAK_CONCURRENT_WORKERS:-0}
   DIG_BATCHES_ENQUEUED    ${DIG_BATCHES_ENQUEUED:-0}
+  DRAIN_FORCED            ${DRAIN_FORCED:-0}
 EOF
 
             ;;
         exit-codes)
 
-            printf '%b\n\n' "Topic: ${BOLD}exit-codes${NONE}"
+            help_topic_header "exit-codes"
 
             cat <<EOF
 Purpose:
@@ -4400,7 +5481,7 @@ EOF
             ;;
         status)
 
-            printf '%b\n\n' "Topic: ${BOLD}status${NONE}"
+            help_topic_header "status"
 
             cat <<EOF
 Purpose:
@@ -4458,7 +5539,7 @@ EOF
             ;;
         install)
 
-            printf '%b\n\n' "Topic: ${BOLD}install${NONE}"
+            help_topic_header "install"
 
             cat <<EOF
 Usage:
@@ -4489,7 +5570,7 @@ EOF
             ;;
         full)
 
-            printf '%b\n\n' "Topic: ${BOLD}full${NONE}"
+            help_topic_header "full"
 
             cat <<EOF
 Meaning:
@@ -4515,7 +5596,7 @@ EOF
             ;;
         uninstall)
 
-            printf '%b\n\n' "Topic: ${BOLD}uninstall${NONE}"
+            help_topic_header "uninstall"
 
             cat <<EOF
 Usage:
@@ -4547,7 +5628,7 @@ EOF
             ;;
         with-systemd)
 
-            printf '%b\n\n' "Topic: ${BOLD}with-systemd${NONE}"
+            help_topic_header "with-systemd"
 
             cat <<EOF
 Meaning:
@@ -4575,7 +5656,7 @@ EOF
             ;;
         with-bash-completion)
 
-            printf '%b\n\n' "Topic: ${BOLD}with-bash-completion${NONE}"
+            help_topic_header "with-bash-completion"
 
             cat <<EOF
 Meaning:
@@ -4603,7 +5684,7 @@ EOF
             ;;
         show)
 
-            printf '%b\n\n' "Topic: ${BOLD}show${NONE}"
+            help_topic_header "show"
 
             cat <<'EOF'
 Usage:
@@ -4625,19 +5706,22 @@ EOF
             ;;
         version)
 
-            printf '%b\n\n' "Topic: ${BOLD}version${NONE}"
+            help_topic_header "version"
 
             cat <<'EOF'
 Usage:
   -v | --version | version
 
 Prints the DNdistresS version and exits.
+
+See also:
+  --help info
 EOF
 
             ;;
         auto-tune)
 
-            printf '%b\n\n' "Topic: ${BOLD}auto-tune${NONE}"
+            help_topic_header "auto-tune"
 
             cat <<EOF
 Meaning:
@@ -4730,7 +5814,7 @@ EOF
             ;;
         binary)
 
-            printf '%b\n\n' "Topic: ${BOLD}binary${NONE}"
+            help_topic_header "binary"
 
             cat <<EOF
 Values:
@@ -4750,7 +5834,7 @@ EOF
             ;;
         dig-options)
 
-            printf '%b\n\n' "Topic: ${BOLD}dig-options${NONE}"
+            help_topic_header "dig-options"
 
             cat <<EOF
 Meaning:
@@ -4797,7 +5881,7 @@ EOF
             ;;
         dig-options-mode)
 
-            printf '%b\n\n' "Topic: ${BOLD}dig-options-mode${NONE}"
+            help_topic_header "dig-options-mode"
 
             cat <<EOF
 Meaning:
@@ -4822,7 +5906,7 @@ EOF
             ;;
         strict-dig-options)
 
-            printf '%b\n\n' "Topic: ${BOLD}strict-dig-options${NONE}"
+            help_topic_header "strict-dig-options"
 
             cat <<EOF
 Meaning:
@@ -4851,7 +5935,7 @@ EOF
             ;;
         batch)
 
-            printf '%b\n\n' "Topic: ${BOLD}batch${NONE}"
+            help_topic_header "batch"
 
             cat <<EOF
 Meaning:
@@ -4870,6 +5954,8 @@ Scope:
 
 Effective size:
   _DIG_BATCH_SIZE_EFFECTIVE = min(_DIG_BATCH_SIZE, _BURST), at least 1.
+  In parallel mirrored fanout, logical batch admissions are:
+  floor(_DIG_BATCH_SIZE_EFFECTIVE / endpoint_count), at least 1.
 
 See also:
   --help burst
@@ -4881,7 +5967,7 @@ EOF
             ;;
         burst)
 
-            printf '%b\n\n' "Topic: ${BOLD}burst${NONE}"
+            help_topic_header "burst"
 
             cat <<EOF
 Meaning:
@@ -4914,7 +6000,7 @@ EOF
             ;;
         force-burst)
 
-            printf '%b\n\n' "Topic: ${BOLD}force-burst${NONE}"
+            help_topic_header "force-burst"
 
             cat <<EOF
 Meaning:
@@ -4936,7 +6022,7 @@ EOF
             ;;
         column)
 
-            printf '%b\n\n' "Topic: ${BOLD}column${NONE}"
+            help_topic_header "column"
 
             cat <<EOF
 Meaning:
@@ -4954,7 +6040,7 @@ EOF
             ;;
         custom)
 
-            printf '%b\n\n' "Topic: ${BOLD}custom${NONE}"
+            help_topic_header "custom"
 
             cat <<EOF
 Meaning:
@@ -4967,7 +6053,7 @@ EOF
             ;;
         directory)
 
-            printf '%b\n\n' "Topic: ${BOLD}directory${NONE}"
+            help_topic_header "directory"
 
             cat <<EOF
 Meaning:
@@ -4980,7 +6066,7 @@ EOF
             ;;
         duration)
 
-            printf '%b\n\n' "Topic: ${BOLD}duration${NONE}"
+            help_topic_header "duration"
 
             cat <<EOF
 Meaning:
@@ -5009,7 +6095,7 @@ EOF
             ;;
         file)
 
-            printf '%b\n\n' "Topic: ${BOLD}file${NONE}"
+            help_topic_header "file"
 
             cat <<EOF
 Meaning:
@@ -5024,7 +6110,7 @@ EOF
             ;;
         format)
 
-            printf '%b\n\n' "Topic: ${BOLD}format${NONE}"
+            help_topic_header "format"
 
             cat <<EOF
 Values:
@@ -5040,7 +6126,7 @@ EOF
             ;;
         local)
 
-            printf '%b\n\n' "Topic: ${BOLD}local${NONE}"
+            help_topic_header "local"
 
             cat <<EOF
 Meaning:
@@ -5065,7 +6151,7 @@ EOF
             ;;
         location)
 
-            printf '%b\n\n' "Topic: ${BOLD}location${NONE}"
+            help_topic_header "location"
 
             cat <<EOF
 Values:
@@ -5095,7 +6181,7 @@ EOF
             ;;
         maximum)
 
-            printf '%b\n\n' "Topic: ${BOLD}maximum${NONE}"
+            help_topic_header "maximum"
 
             cat <<EOF
 Meaning:
@@ -5121,7 +6207,7 @@ EOF
             ;;
         force-maximum)
 
-            printf '%b\n\n' "Topic: ${BOLD}force-maximum${NONE}"
+            help_topic_header "force-maximum"
 
             cat <<EOF
 Meaning:
@@ -5139,7 +6225,7 @@ EOF
             ;;
         output)
 
-            printf '%b\n\n' "Topic: ${BOLD}output${NONE}"
+            help_topic_header "output"
 
             cat <<EOF
 Values:
@@ -5154,7 +6240,7 @@ EOF
             ;;
         port)
 
-            printf '%b\n\n' "Topic: ${BOLD}port${NONE}"
+            help_topic_header "port"
 
             cat <<EOF
 Meaning:
@@ -5170,7 +6256,7 @@ EOF
             ;;
         qps)
 
-            printf '%b\n\n' "Topic: ${BOLD}qps${NONE}"
+            help_topic_header "qps"
 
             cat <<EOF
 Meaning:
@@ -5182,6 +6268,12 @@ Default:
 Validation:
   Positive integer.
 
+Parallel mirrored fanout:
+  Global backend QPS is still governed by _QPS.
+  Each logical domain admission in parallel consumes one token per endpoint.
+  This preserves global backend budget while mirroring domains to all
+  resolvers.
+
 See also:
   --help burst
   --help maximum
@@ -5192,7 +6284,7 @@ EOF
             ;;
         clock-tick-ms)
 
-            printf '%b\n\n' "Topic: ${BOLD}clock-tick-ms${NONE}"
+            help_topic_header "clock-tick-ms"
 
             cat <<EOF
 Meaning:
@@ -5215,7 +6307,7 @@ EOF
             ;;
         drain-timeout-ms)
 
-            printf '%b\n\n' "Topic: ${BOLD}drain-timeout-ms${NONE}"
+            help_topic_header "drain-timeout-ms"
 
             cat <<EOF
 Meaning:
@@ -5242,7 +6334,7 @@ EOF
             ;;
         random)
 
-            printf '%b\n\n' "Topic: ${BOLD}random${NONE}"
+            help_topic_header "random"
 
             cat <<EOF
 Meaning:
@@ -5267,7 +6359,7 @@ EOF
             ;;
         remote)
 
-            printf '%b\n\n' "Topic: ${BOLD}remote${NONE}"
+            help_topic_header "remote"
 
             cat <<EOF
 Meaning:
@@ -5292,7 +6384,7 @@ EOF
             ;;
         seconds)
 
-            printf '%b\n\n' "Topic: ${BOLD}seconds${NONE}"
+            help_topic_header "seconds"
 
             cat <<EOF
 Meaning:
@@ -5315,7 +6407,7 @@ EOF
             ;;
         top)
 
-            printf '%b\n\n' "Topic: ${BOLD}top${NONE}"
+            help_topic_header "top"
 
             cat <<EOF
 Meaning:
@@ -5355,7 +6447,7 @@ EOF
             ;;
         type)
 
-            printf '%b\n\n' "Topic: ${BOLD}type${NONE}"
+            help_topic_header "type"
 
             cat <<EOF
 Meaning:
@@ -5413,7 +6505,7 @@ EOF
             ;;
         deny-any|allow-any)
 
-            printf '%b\n\n' "Topic: ${BOLD}${topic}${NONE}"
+            help_topic_header "$topic"
 
             cat <<EOF
 Meaning:
@@ -5438,7 +6530,7 @@ EOF
             ;;
         url)
 
-            printf '%b\n\n' "Topic: ${BOLD}url${NONE}"
+            help_topic_header "url"
 
             cat <<EOF
 Meaning:
@@ -5451,7 +6543,7 @@ EOF
             ;;
         verbosity)
 
-            printf '%b\n\n' "Topic: ${BOLD}verbosity${NONE}"
+            help_topic_header "verbosity"
 
             cat <<EOF
 Values:
@@ -5478,7 +6570,7 @@ EOF
             ;;
         log-mode)
 
-            printf '%b\n\n' "Topic: ${BOLD}log-mode${NONE}"
+            help_topic_header "log-mode"
 
             cat <<EOF
 Meaning:
@@ -5522,8 +6614,20 @@ canonical_help_topic() {
         topics)
             printf '%s\n' "topics"
             ;;
-        info|about|whatis|purpose)
+        topics-list|topic-list|topiclist)
+            printf '%s\n' "topics-list"
+            ;;
+        what|purpose)
+            printf '%s\n' "what"
+            ;;
+        why|rationale)
+            printf '%s\n' "why"
+            ;;
+        info|about)
             printf '%s\n' "info"
+            ;;
+        example|examples)
+            printf '%s\n' "examples"
             ;;
         description|desc)
             printf '%s\n' "description"
@@ -5533,6 +6637,9 @@ canonical_help_topic() {
             ;;
         resolver|dns)
             printf '%s\n' "resolver"
+            ;;
+        resolver-strategy|resolver_strategy|--resolver-strategy)
+            printf '%s\n' "resolver-strategy"
             ;;
         environment|env|vars|environment-variables)
             printf '%s\n' "environment"
@@ -5921,6 +7028,7 @@ show_conditions() {
 }
 
 run_show_topic() {
+
     case "${1:-}" in
         w|warranty)
 
@@ -5990,7 +7098,9 @@ timer_period_seconds() {
                 printf '%s\n' 31536000
                 return 0
                 ;;
-            *) return 1 ;;
+            *)
+                return 1
+                ;;
         esac
 
     }
@@ -6043,10 +7153,14 @@ timer_period_seconds() {
                 s=$0
                 sub(/^[[:space:]]+/, "", s)
                 sub(/[[:space:]]+$/, "", s)
-                split(s, a, /[[:space:]]*;[[:space:]]*/)
-                for (i=1; i<=length(a); i++) {
+                n=split(s, a, /[[:space:]]*;[[:space:]]*/)
+
+                for (i=1; i<=n; i++) {
+
                     if (a[i] != "") { print a[i]; exit }
+
                 }
+
             }
         ')"
 
@@ -6060,6 +7174,7 @@ timer_period_seconds() {
     timer_file="$SERVICE_DIR/${UNIT_BASE}.timer"
 
     if [ -r "$timer_file" ]; then
+
         raw="$(awk -F= '
             /^[[:space:]]*OnUnitActiveSec[[:space:]]*=/ {
                 v=$2
@@ -6089,10 +7204,14 @@ timer_period_seconds() {
                 v=$2
                 sub(/^[[:space:]]+/, "", v)
                 sub(/[[:space:]]+$/, "", v)
-                split(v, a, /[[:space:]]*;[[:space:]]*/)
-                for (i=1; i<=length(a); i++) {
+                n=split(v, a, /[[:space:]]*;[[:space:]]*/)
+
+                for (i=1; i<=n; i++) {
+
                     if (a[i] != "") { print a[i]; exit }
+
                 }
+
                 exit
             }
         ' "$timer_file")"
@@ -6160,7 +7279,7 @@ log_effective_config() {
 
     log 5 "effective status/system config: ${LIGHT_GREY}STATUS_ENABLED=$_STATUS_ENABLED STATUS_DIR=$_STATUS_DIR STATUS_FILE=$_STATUS_FILE LOCK_DIR=$_LOCK_DIR LOCK_FILE=$_LOCK_FILE TMPDIR=${TMPDIR:-/tmp} LOG_MODE=${LOG_MODE:-auto} LOG_TAG=${LOG_TAG:-${0##*/}} TIMER_PERIOD=$timer_period_disp SERVICE_DIR=$SERVICE_DIR UNIT_BASE=$UNIT_BASE COMPLETION_DIR=$COMPLETION_DIR"
 
-    log 5 "effective derived config: ${LIGHT_GREY}BURST_EFFECTIVE=$_BURST_EFFECTIVE DIG_BATCH_SIZE_EFFECTIVE=$_DIG_BATCH_SIZE_EFFECTIVE LOCATION_FORCED=$_LOCATION_FORCED LOCATION_EXPLICIT=$_LOCATION_EXPLICIT"
+    log 5 "effective derived config: ${LIGHT_GREY}BURST_EFFECTIVE=$_BURST_EFFECTIVE DIG_BATCH_SIZE_EFFECTIVE=$_DIG_BATCH_SIZE_EFFECTIVE DIG_BATCH_LOGICAL_SIZE_EFFECTIVE=$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE DISPATCH_FANOUT=$DISPATCH_FANOUT DISPATCH_TOKEN_COST=$DISPATCH_TOKEN_COST DISPATCH_BURST_LOGICAL=$DISPATCH_BURST_LOGICAL LOCATION_FORCED=$_LOCATION_FORCED LOCATION_EXPLICIT=$_LOCATION_EXPLICIT"
 
 }
 
@@ -6168,6 +7287,7 @@ CLEANED=0
 ABORT_HANDLED=0
 
 SENT=0
+LOGICAL_SENT=0
 DOMAINS_EOF=0
 
 stop_worker_pool() {
@@ -6201,8 +7321,15 @@ stop_worker_pool() {
 
         while [ "$i" -le "$WORKER_COUNT" ]; do
             fifo="$TMPDIR/queue.$i.fifo"
+            pid="$(printf '%s\n' "$WORKER_PIDS" | awk -v n="$i" '{ print $n }')"
 
-            [ -p "$fifo" ] && printf '%s\n' "$WORKER_STOP_TOKEN" > "$fifo" 2>/dev/null || true
+            if [ -p "$fifo" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                (
+                    exec 8<>"$fifo" || exit 1
+                    printf '%s\n' "$WORKER_STOP_TOKEN" >&8 || exit 1
+                    exec 8>&-
+                ) 2>/dev/null || true
+            fi
 
             i=$((i + 1))
         done
@@ -6474,6 +7601,7 @@ show_runtime_report() {
             {
 
                 if (out != "") out = out GREY ", " LIGHT_GREY
+
                 else out = out LIGHT_GREY
 
                 out = out $2 GREY " (" LIGHT_GREY $1 GREY ")"
@@ -6507,6 +7635,8 @@ show_runtime_report() {
     if [ "$v" -le 2 ]; then
 
         rr_line "queries sent:" "$sent"
+
+        [ "${DISPATCH_FANOUT:-1}" -gt 1 ] && rr_line "logical queries admitted:" "${logical_sent:-0}"
 
         [ "$COMPLETED" -gt 0 ] && rr_line "queries completed:" "$COMPLETED"
 
@@ -6564,6 +7694,8 @@ show_runtime_report() {
     rr_ts_line "queries start:" "$queries_start"
 
     rr_line "queries sent:" "$sent"
+
+    [ "${DISPATCH_FANOUT:-1}" -gt 1 ] && rr_line "logical queries admitted:" "${logical_sent:-0}"
 
     [ "$COMPLETED" -gt 0 ] && \
         rr_line "queries completed:" "$COMPLETED"
@@ -6978,23 +8110,7 @@ auto_tune_worker_and_burst() {
 
     probe_file="$TMPDIR/auto_tune_probe.txt"
 
-    awk -v n="$samples" '
-        { a[++c] = $0 }
-        END {
-
-            if (n > c) n = c
-
-            srand()
-
-            for (i = c; i > 1; i--) {
-                j = int(rand() * i) + 1
-                t = a[i]; a[i] = a[j]; a[j] = t
-            }
-
-            for (i = 1; i <= n; i++) print a[i]
-
-        }
-    ' "$DOMAINS" > "$probe_file"
+    sample_domains_from_file "$DOMAINS" "$samples" random > "$probe_file"
 
     probe_n="$(wc -l < "$probe_file" | tr -d ' ')"
 
@@ -7057,28 +8173,12 @@ auto_tune_worker_and_burst() {
                 : > "$batch_file"
             fi
 
-            if [ "${_RANDOM:-0}" -eq 1 ]; then
-
-                pick_query_type
-
-                probe_qtype="$PICKED_QTYPE"
-            else
-                probe_qtype="$_TYPE"
-            fi
-
+            probe_qtype="$(resolve_probe_qtype)"
             printf '%s %s\n' "$d" "$probe_qtype" >> "$batch_file" || continue
             batch_count=$((batch_count + 1))
 
             if [ "$batch_count" -ge "$auto_batch_effective" ]; then
-                q_start="$(mono_ms)"
-
-                query_dig_batch_file "$batch_file" >/dev/null 2>&1 || true
-
-                q_end="$(mono_ms)"
-                q_ms=$((q_end - q_start))
-
-                [ "$q_ms" -lt 1 ] && q_ms=1
-
+                q_ms="$(probe_dig_batch_latency_ms "$batch_file" "$ANSWERS_FILE" "$RESOLVER" "$_PORT" 2>/dev/null || printf '1\n')"
                 printf '%s\n' "$q_ms" >> "$lat_file"
                 done_n=$((done_n + 1))
 
@@ -7091,15 +8191,7 @@ auto_tune_worker_and_burst() {
         done < "$probe_file"
 
         if [ "$batch_count" -gt 0 ] && [ -n "$batch_file" ] && [ -s "$batch_file" ]; then
-            q_start="$(mono_ms)"
-
-            query_dig_batch_file "$batch_file" >/dev/null 2>&1 || true
-
-            q_end="$(mono_ms)"
-            q_ms=$((q_end - q_start))
-
-            [ "$q_ms" -lt 1 ] && q_ms=1
-
+            q_ms="$(probe_dig_batch_latency_ms "$batch_file" "$ANSWERS_FILE" "$RESOLVER" "$_PORT" 2>/dev/null || printf '1\n')"
             printf '%s\n' "$q_ms" >> "$lat_file"
             done_n=$((done_n + 1))
 
@@ -7113,23 +8205,8 @@ auto_tune_worker_and_burst() {
 
             [ -n "$d" ] || continue
 
-            if [ "${_RANDOM:-0}" -eq 1 ]; then
-
-                pick_query_type
-
-                probe_qtype="$PICKED_QTYPE"
-            else
-                probe_qtype="$_TYPE"
-            fi
-
-            q_start="$(mono_ms)"
-
-            query_one "$d" "$probe_qtype" >/dev/null 2>&1 || true
-
-            q_end="$(mono_ms)"
-            q_ms=$((q_end - q_start))
-
-            [ "$q_ms" -lt 1 ] && q_ms=1
+            probe_qtype="$(resolve_probe_qtype)"
+            q_ms="$(probe_query_latency_ms "$d" "$probe_qtype" "$ANSWERS_FILE" "$RESOLVER" "$_PORT" 2>/dev/null || printf '1\n')"
 
             printf '%s\n' "$q_ms" >> "$lat_file"
             done_n=$((done_n + 1))
@@ -7192,55 +8269,19 @@ auto_tune_worker_and_burst() {
 
     [ "$burst_window_ms" -ge 1 ] || burst_window_ms=1
 
-    stats="$(
-
-        sort -n "$lat_file" 2>/dev/null | awk \
-            -v trim="$trim_pct" \
-            -v pct="$pctl" '
-            { if ($1 ~ /^[0-9]+$/) a[++n] = $1 }
-            END {
-
-                if (n < 3) exit 1
-
-                lo = int(n * trim / 100) + 1
-                hi = n - int(n * trim / 100)
-
-                if (hi < lo) { lo = 1; hi = n }
-
-                m = 0
-
-                for (i = lo; i <= hi; i++) b[++m] = a[i]
-
-                if (m < 1) exit 1
-
-                mid = int((m + 1) / 2)
-
-                if (m % 2) p50 = b[mid]
-                else p50 = (b[mid] + b[mid + 1]) / 2
-
-                idx = int((m * pct + 99) / 100)
-
-                if (idx < 1) idx = 1
-
-                if (idx > m) idx = m
-
-                pp = b[idx]
-
-                printf "%.0f %.0f %d\n", p50, pp, m
-            }
-
-        '
-    )"
+    stats="$(latency_stats_file "$lat_file" "$trim_pct" "$pctl" percent 2>/dev/null || true)"
 
     if [ -n "$stats" ]; then
-        p50_ms="$(printf '%s\n' "$stats" | awk '{print $1}')"
-        pctl_ms="$(printf '%s\n' "$stats" | awk '{print $2}')"
-        trimmed_n="$(printf '%s\n' "$stats" | awk '{print $3}')"
+        p50_ms="$(printf '%s\n' "$stats" | awk '{print $2}')"
+        pctl_ms="$(printf '%s\n' "$stats" | awk '{print $3}')"
+        trimmed_n="$(printf '%s\n' "$stats" | awk '{print $4}')"
 
         is_posint "$p50_ms" || p50_ms=1
+
         is_posint "$pctl_ms" || pctl_ms="$p50_ms"
 
         cap_ms=$((p50_ms * pctl_ratio))
+
         [ "$cap_ms" -lt 1 ] && cap_ms=1
 
         if [ "$pctl_ms" -gt "$cap_ms" ]; then
@@ -7312,7 +8353,6 @@ auto_tune_worker_and_burst() {
 
 }
 
-# This is deliberate, DO NOT REMOVE OR REFERENCE - saint
 strict_smoke_orphan_pass() {
     true
 }
@@ -7685,6 +8725,19 @@ do_DNdistresS() {
                 parse_resolver_cli_arg "remote" "$1" "$2" || exit_with_status "$EXIT_USAGE"
 
                 shift 2
+                ;;
+            --resolver-strategy|resolver-strategy)
+                SEEN_NONEXCLUSIVE=1
+
+                need_optarg "$1" "$@"
+
+                _RESOLVER_STRATEGY="$2"
+                shift 2
+                ;;
+            --resolver-strategy=*|resolver-strategy=*)
+                SEEN_NONEXCLUSIVE=1
+                _RESOLVER_STRATEGY="${1#*=}"
+                shift
                 ;;
             -s|s|--seconds|seconds)
                 SEEN_NONEXCLUSIVE=1
@@ -8101,6 +9154,18 @@ do_DNdistresS() {
             ;;
     esac
 
+    case "$_RESOLVER_STRATEGY" in
+        rr|random|fastest|parallel)
+            ;;
+        *)
+
+            log_invalid_enum "_RESOLVER_STRATEGY" "$_RESOLVER_STRATEGY" rr random fastest parallel
+
+            exit_with_status "$EXIT_USAGE"
+
+            ;;
+    esac
+
     _TYPE="$(printf '%s' "$_TYPE" | tr '[:lower:]' '[:upper:]')"
     _TYPE_ID=""
 
@@ -8224,61 +9289,46 @@ do_DNdistresS() {
 
     fi
 
-    RESOLVER=""
+    [ -n "$_LOCAL_POOL" ] || append_pool_unique local "${_LOCAL}#${_PORT}"
+
+    [ -n "$_REMOTE_POOL" ] || append_pool_unique remote "${_REMOTE}#${_PORT}"
 
     case "$_LOCATION" in
         auto)
 
             if [ "$SEEN_R" -eq 1 ]; then
-
-                is_valid_dns "$_REMOTE" || {
-
-                    log 1 "${LIGHT_GREY}_REMOTE${RED} must be one (${LIGHT_GREY}1${RED}) of valid resolver, got: ${LIGHT_GREY}$_REMOTE"
-
-                    exit_with_status "$EXIT_RESOLVER"
-
-                }
-
-                RESOLVER="$_REMOTE"
-
-                log 4 "location auto selected remote resolver"
-
+                ACTIVE_LOCATION="remote"
             else
-
-                is_valid_local_dns "$_LOCAL" || {
-
-                    log 1 "${LIGHT_GREY}_LOCAL${RED} must be one (${LIGHT_GREY}1${RED}) of valid local resolver, got: ${LIGHT_GREY}$_LOCAL"
-
-                    exit_with_status "$EXIT_RESOLVER"
-
-                }
-
-                RESOLVER="$_LOCAL"
-
-                log 4 "location auto selected local resolver"
-
+                ACTIVE_LOCATION="local"
             fi
 
             ;;
         local)
+            ACTIVE_LOCATION="local"
+            ;;
+        remote)
+            ACTIVE_LOCATION="remote"
+            ;;
+    esac
+
+    case "$ACTIVE_LOCATION" in
+        local)
 
             if [ "$_LOCATION_FORCED" -eq 1 ]; then
 
-                is_valid_dns "$_LOCAL" || {
+                validate_pool_for_mode local dns || {
 
-                    log 1 "${LIGHT_GREY}_LOCAL${RED} must be one (${LIGHT_GREY}1${RED}) of valid resolver syntax, got: ${LIGHT_GREY}$_LOCAL"
+                    log 1 "invalid local resolver pool in forced local mode"
 
                     exit_with_status "$EXIT_RESOLVER"
 
                 }
 
-                log 4 "location local forced override active"
-
             else
 
-                is_valid_local_dns "$_LOCAL" || {
+                validate_pool_for_mode local local-strict || {
 
-                    log 1 "${LIGHT_GREY}_LOCAL${RED} must be one (${LIGHT_GREY}1${RED}) of valid local resolver, got: ${LIGHT_GREY}$_LOCAL"
+                    log 1 "invalid local resolver pool"
 
                     exit_with_status "$EXIT_RESOLVER"
 
@@ -8286,21 +9336,30 @@ do_DNdistresS() {
 
             fi
 
-            RESOLVER="$_LOCAL"
             ;;
         remote)
 
-            is_valid_dns "$_REMOTE" || {
+            validate_pool_for_mode remote dns || {
 
-                log 1 "${LIGHT_GREY}_REMOTE${RED} must be one (${LIGHT_GREY}1${RED}) of valid resolver, got: ${LIGHT_GREY}$_REMOTE"
+                log 1 "invalid remote resolver pool"
 
                 exit_with_status "$EXIT_RESOLVER"
 
             }
-
-            RESOLVER="$_REMOTE"
             ;;
     esac
+
+    first_ep="$(pool_nth "$(pool_get "$ACTIVE_LOCATION")" 1)"
+
+    [ -n "$first_ep" ] || {
+
+        log 1 "no resolver endpoints available for active location"
+
+        exit_with_status "$EXIT_RESOLVER"
+
+    }
+
+    RESOLVER="${first_ep%\#*}"
 
     if [ -n "$_FILE" ] && [ ! -r "$_FILE" ]; then
 
@@ -8397,6 +9456,7 @@ do_DNdistresS() {
         -v GREY="$GREY" \
         -v NONE="$NONE" \
         -v LIGHT_GREY="$LIGHT_GREY" '
+
         function emit_domain(d) {
             out_count++
 
@@ -8524,7 +9584,29 @@ do_DNdistresS() {
 
     log 3 "got ${LIGHT_GREY}$_DOMAINS ${BLUE}domains from source"
 
+    if [ "$_RESOLVER_STRATEGY" = "fastest" ]; then
+
+        log 3 "resolver strategy ${LIGHT_GREY}fastest${BLUE}: probing endpoints"
+
+        select_fastest_resolver "$ACTIVE_LOCATION" "$DOMAINS" || {
+
+            log 1 "failed to select fastest resolver endpoint"
+
+            exit_with_status "$EXIT_RESOLVER"
+
+        }
+
+    fi
+
     auto_tune_worker_and_burst
+
+    compute_dispatch_profile "$ACTIVE_LOCATION" || {
+
+        log 1 "failed to compute dispatch profile"
+
+        exit_with_status "$EXIT_INTERNAL"
+
+    }
 
     DIG_BATCHES_ENQUEUED=0
     DIG_BATCH_SEQ=0
@@ -8541,7 +9623,7 @@ do_DNdistresS() {
 
         }
 
-        log 3 "dig batching enabled: ${LIGHT_GREY}size=$_DIG_BATCH_SIZE_EFFECTIVE"
+        log 3 "dig batching enabled: ${LIGHT_GREY}size=$_DIG_BATCH_SIZE_EFFECTIVE${BLUE} (logical=${LIGHT_GREY}$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE${BLUE})"
 
     fi
 
@@ -8587,6 +9669,10 @@ do_DNdistresS() {
     CLOCK_TICK_MS="$_CLOCK_TICK_MS"
 
     [ "$CLOCK_TICK_MS" -lt 1 ] && CLOCK_TICK_MS=1
+
+    DISPATCH_TOKEN_COST_UNITS=$((DISPATCH_TOKEN_COST * 1000))
+
+    [ "$DISPATCH_TOKEN_COST_UNITS" -ge 1000 ] || DISPATCH_TOKEN_COST_UNITS=1000
 
     STOP_MAIN=0
     STOP_REASON="normal"
@@ -8634,8 +9720,8 @@ do_DNdistresS() {
             DEBUG_TICK_MS="$now_m"
         fi
 
-        if [ "$MTOKENS" -lt 1000 ]; then
-            deficit=$((1000 - MTOKENS))
+        if [ "$MTOKENS" -lt "$DISPATCH_TOKEN_COST_UNITS" ]; then
+            deficit=$((DISPATCH_TOKEN_COST_UNITS - MTOKENS))
 
             [ "$deficit" -lt 1 ] && deficit=1
 
@@ -8650,9 +9736,9 @@ do_DNdistresS() {
             continue
         fi
 
-        send_budget=$((MTOKENS / 1000))
+        send_budget=$((MTOKENS / DISPATCH_TOKEN_COST_UNITS))
 
-        [ "$send_budget" -gt "$_BURST" ] && send_budget="$_BURST"
+        [ "$send_budget" -gt "$DISPATCH_BURST_LOGICAL" ] && send_budget="$DISPATCH_BURST_LOGICAL"
 
         if [ "$send_budget" -gt 1 ]; then
             BURST_TRIGGERED=$((BURST_TRIGGERED + 1))
@@ -8663,21 +9749,58 @@ do_DNdistresS() {
         while [ "$i" -lt "$send_budget" ]; do
 
             if [ -n "$DIG_BATCH_DIR" ]; then
+                targets="$(resolver_targets_for_dispatch "$ACTIVE_LOCATION" 2>/dev/null || true)"
+
+                if [ -z "$targets" ]; then
+                    log 0 "failed to pick resolver endpoint(s)"
+                    STOP_MAIN=1
+                    STOP_REASON="resolver-pick-fail"
+                    break
+                fi
+
                 DIG_BATCH_SEQ=$((DIG_BATCH_SEQ + 1))
-                batch_file="$DIG_BATCH_DIR/batch.$DIG_BATCH_SEQ.txt"
+                batch_map="$DIG_BATCH_DIR/batch.$DIG_BATCH_SEQ.map"
 
-                : > "$batch_file" || {
-
-                    log 0 "failed to create dig batch file: ${LIGHT_GREY}$batch_file"
-
+                : > "$batch_map" || {
+                    log 0 "failed to create dig batch map: ${LIGHT_GREY}$batch_map"
                     STOP_MAIN=1
                     STOP_REASON="batch-create-fail"
                     break
                 }
 
+                oldifs=$IFS
+                IFS='
+'
+                batch_target_count=0
+                for ep in $targets; do
+                    [ -n "$ep" ] || continue
+
+                    batch_host="${ep%\#*}"
+                    batch_port="${ep##*\#}"
+                    batch_target_count=$((batch_target_count + 1))
+                    batch_file="$DIG_BATCH_DIR/batch.$DIG_BATCH_SEQ.$batch_target_count.txt"
+
+                    : > "$batch_file" || {
+                        log 0 "failed to create dig batch file: ${LIGHT_GREY}$batch_file"
+                        STOP_MAIN=1
+                        STOP_REASON="batch-create-fail"
+                        break
+                    }
+
+                    printf '%s|%s|%s\n' "$batch_host" "$batch_port" "$batch_file" >> "$batch_map" || {
+                        log 0 "failed to write dig batch map: ${LIGHT_GREY}$batch_map"
+                        STOP_MAIN=1
+                        STOP_REASON="batch-write-fail"
+                        break
+                    }
+                done
+                IFS=$oldifs
+
+                [ "$STOP_MAIN" -eq 1 ] && break
+
                 batch_count=0
 
-                while [ "$i" -lt "$send_budget" ] && [ "$batch_count" -lt "$_DIG_BATCH_SIZE_EFFECTIVE" ]; do
+                while [ "$i" -lt "$send_budget" ] && [ "$batch_count" -lt "$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE" ]; do
 
                     if ! next_domain; then
 
@@ -8705,43 +9828,69 @@ do_DNdistresS() {
                         QUERIES_START=$((START_TS + now_m - START_MONO))
                     fi
 
-                    printf '%s %s\n' "$d" "$qtype" >> "$batch_file" || {
+                    while IFS='|' read -r batch_host batch_port batch_file; do
+                        [ -n "$batch_file" ] || continue
 
-                        log 0 "failed to write dig batch file: ${LIGHT_GREY}$batch_file"
+                        printf '%s %s\n' "$d" "$qtype" >> "$batch_file" || {
 
-                        STOP_MAIN=1
-                        STOP_REASON="batch-write-fail"
-                        break
-                    }
+                            log 0 "failed to write dig batch file: ${LIGHT_GREY}$batch_file"
 
-                    SENT=$((SENT + 1))
+                            STOP_MAIN=1
+                            STOP_REASON="batch-write-fail"
+                            break
+                        }
+                    done < "$batch_map"
+
+                    [ "$STOP_MAIN" -eq 1 ] && break
+
+                    LOGICAL_SENT=$((LOGICAL_SENT + 1))
+                    SENT=$((SENT + DISPATCH_TOKEN_COST))
 
                     bump_query_type_count "$qtype"
 
                     LAST_SENT_MS=$((START_TS + now_m - START_MONO))
-                    MTOKENS=$((MTOKENS - 1000))
+                    MTOKENS=$((MTOKENS - DISPATCH_TOKEN_COST_UNITS))
                     i=$((i + 1))
                     batch_count=$((batch_count + 1))
                 done
 
                 if [ "$batch_count" -gt 0 ]; then
 
-                    if ! enqueue_job "${DIG_BATCH_PREFIX}|$batch_count|$batch_file"; then
+                    while IFS='|' read -r batch_host batch_port batch_file; do
 
-                        log 0 "worker queue write failed for dig batch: ${LIGHT_GREY}$batch_file"
+                        [ -n "$batch_file" ] || continue
 
-                        STOP_MAIN=1
-                        STOP_REASON="queue-fail"
+                        if ! enqueue_job "${DIG_BATCH_PREFIX}|$batch_count|$batch_file|$batch_host|$batch_port"; then
+                            log 0 "worker queue write failed for dig batch: ${LIGHT_GREY}$batch_file"
+                            STOP_MAIN=1
+                            STOP_REASON="queue-fail"
+                            break
+                        fi
+
+                    done < "$batch_map"
+
+                    [ "$STOP_MAIN" -eq 1 ] && {
+
+                        rm -f "$batch_map" 2>/dev/null || true
+
                         break
-                    fi
+                    }
 
-                    DIG_BATCHES_ENQUEUED=$((DIG_BATCHES_ENQUEUED + 1))
+                    DIG_BATCHES_ENQUEUED=$((DIG_BATCHES_ENQUEUED + batch_target_count))
                 else
 
-                    rm -f "$batch_file" 2>/dev/null || true
+                    while IFS='|' read -r batch_host batch_port batch_file; do
+
+                        [ -n "$batch_file" ] && rm -f "$batch_file" 2>/dev/null || true
+
+                    done < "$batch_map"
+
+                    rm -f "$batch_map" 2>/dev/null || true
 
                     break
                 fi
+
+                rm -f "$batch_map" 2>/dev/null || true
 
                 [ "$STOP_MAIN" -eq 1 ] && break
 
@@ -8774,7 +9923,35 @@ do_DNdistresS() {
                 QUERIES_START=$((START_TS + now_m - START_MONO))
             fi
 
-            if ! enqueue_job "${qtype}|$d"; then
+            targets="$(resolver_targets_for_dispatch "$ACTIVE_LOCATION" 2>/dev/null || true)"
+
+            if [ -z "$targets" ]; then
+                STOP_MAIN=1
+                STOP_REASON="resolver-pick-fail"
+                break
+            fi
+
+            enqueue_failed=0
+            oldifs=$IFS
+            IFS='
+'
+            for ep in $targets; do
+
+                [ -n "$ep" ] || continue
+
+                host="${ep%\#*}"
+                port="${ep##*\#}"
+
+                if ! enqueue_job "${qtype}|$d|$host|$port"; then
+                    enqueue_failed=1
+                    break
+                fi
+
+            done
+
+            IFS=$oldifs
+
+            if [ "$enqueue_failed" -eq 1 ]; then
 
                 log 0 "worker queue write failed for domain: ${LIGHT_GREY}$d"
 
@@ -8783,12 +9960,13 @@ do_DNdistresS() {
                 break
             fi
 
-            SENT=$((SENT + 1))
+            LOGICAL_SENT=$((LOGICAL_SENT + 1))
+            SENT=$((SENT + DISPATCH_TOKEN_COST))
 
             bump_query_type_count "$qtype"
 
             LAST_SENT_MS=$((START_TS + now_m - START_MONO))
-            MTOKENS=$((MTOKENS - 1000))
+            MTOKENS=$((MTOKENS - DISPATCH_TOKEN_COST_UNITS))
             i=$((i + 1))
         done
 
@@ -8844,6 +10022,9 @@ do_DNdistresS() {
             ;;
         queue-fail|batch-create-fail|batch-write-fail)
             return "$EXIT_QUEUE"
+            ;;
+        resolver-pick-fail)
+            return "$EXIT_RESOLVER"
             ;;
         domains-empty)
             return "$EXIT_PARSE"
