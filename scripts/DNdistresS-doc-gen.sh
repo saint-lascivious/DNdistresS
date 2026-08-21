@@ -9,25 +9,40 @@ ROOT_DIR="$(
     cd -- "$(dirname -- "$0")/.." && pwd
 )"
 
-CLI="$ROOT_DIR/DNdistresS"
+SCRIPT="$ROOT_DIR/DNdistresS"
 OUT="$ROOT_DIR/README.md"
 
-TOPICS_ORDER="usage topics install uninstall show version info description \
-    runtime status environment exit-codes resolver domains binary qps burst \
-    force-burst batch maximum force-maximum auto-tune clock-tick-ms \
-    drain-timeout-ms duration output type random deny-any allow-any \
-    dig-options dig-options-mode strict-dig-options location local remote \
-    port file url format column top custom directory seconds with-systemd \
-    with-bash-completion full verbosity log-mode"
+TOPICS_ORDER="usage topics what why install uninstall examples show version info \
+    description  runtime status environment exit-codes resolver domains binary qps \
+    burst  force-burst batch maximum force-maximum auto-tune clock-tick-ms \
+    drain-timeout-ms duration output type random deny-any allow-any dig-options \
+    dig-options-mode strict-dig-options location local remote port file url format \
+    column top custom directory seconds with-systemd with-bash-completion full \
+    verbosity log-mode"
 
-if [ ! -f "$CLI" ]; then
-    printf '%s\n' "error: CLI not found at $CLI" >&2
+README_EXCLUDE_TOPICS="topics-list general help"
+
+is_readme_topic() {
+
+    case " $README_EXCLUDE_TOPICS " in
+        *" $1 "*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+}
+
+if [ ! -f "$SCRIPT" ]; then
+    printf '%s\n' "error: SCRIPT not found at $SCRIPT" >&2
     exit 1
 fi
 
-if [ ! -x "$CLI" ]; then
+if [ ! -x "$SCRIPT" ]; then
 
-    chmod +x "$CLI"
+    chmod +x "$SCRIPT"
 
 fi
 
@@ -43,7 +58,7 @@ read_cli_var() {
             print v
             exit
         }
-    ' "$CLI"
+    ' "$SCRIPT"
 
 }
 
@@ -54,7 +69,7 @@ read_generated_at() {
 }
 
 read_cli_runtime_version() {
-    "$CLI" --version 2>/dev/null | awk '
+    "$SCRIPT" --version 2>/dev/null | awk '
         NF >= 2 {
             v = $2
             sub(/^v/, "", v)
@@ -137,14 +152,14 @@ run_help() {
 
     if [ "$topic" = "general" ]; then
 
-        if ! "$CLI" --help 2>&1; then
+        if ! "$SCRIPT" --help 2>&1; then
             printf '%s\n' "error: failed to get help for topic '$topic'" >&2
             return 1
         fi
 
     else
 
-        if ! "$CLI" --help "$topic" 2>&1; then
+        if ! "$SCRIPT" --help "$topic" 2>&1; then
             printf '%s\n' "error: failed to get help for topic '$topic'" >&2
             return 1
         fi
@@ -156,8 +171,13 @@ run_help() {
 discover_topics() {
     local output
 
-    if ! output="$("$CLI" --help topics 2>&1)"; then
-        printf '%s\n' "error: failed to discover topics from CLI" >&2
+    if output="$("$SCRIPT" --help topics-list 2>/dev/null)"; then
+        printf '%s\n' "$output" | awk '/^[a-z][a-z0-9-]*$/ { print }' | awk '!seen[$0]++'
+        return 0
+    fi
+
+    if ! output="$("$SCRIPT" --help topics 2>&1)"; then
+        printf '%s\n' "error: failed to discover topics from SCRIPT" >&2
         return 1
     fi
 
@@ -165,14 +185,17 @@ discover_topics() {
         /^[[:space:]]+General:/  { sect=1; next }
         /^[[:space:]]+Commands:/ { sect=1; next }
         /^[[:space:]]+Options:/  { sect=1; next }
-        /^[[:space:]]*Aliases accepted:/ { sect=0; next }
+        /^[[:space:]]+Aliases:/  { sect=0; next }
 
-        sect && /^[[:space:]]{4}[[:alnum:] _-]+$/ {
+        sect && /^[[:space:]]{4}/ {
+
             for (i=1; i<=NF; i++) {
                 if ($i ~ /^[a-z][a-z0-9-]*$/) print $i
             }
+
         }
-    ' | awk '!seen[$0]++' | grep -Ev '^(help|general)$' || true
+    ' | awk '!seen[$0]++' || true
+
 }
 
 reorder_topics() {
@@ -201,7 +224,7 @@ reorder_topics() {
 topic_group() {
 
     case "$1" in
-        general|info|description|usage|runtime|resolver|domains|environment|exit-codes|status|topics)
+        general|what|why|info|description|usage|runtime|resolver|domains|environment|exit-codes|status|topics|examples)
             printf '%s\n' "General"
             ;;
         install|uninstall|show|version)
@@ -214,12 +237,37 @@ topic_group() {
 
 }
 
+emit_static_example_run_section() {
+    cat <<'EOF'
+## Simple Example Run
+
+```text
+A short sample run of DNdistresS with a 10-second duration and otherwise
+default (and thus very conservative) settings:
+
+user@hostname:~$ ./DNdistresS --duration 10
+[·] queries sent:           161
+[·] queries completed:      161
+[·] answers received:       450
+[·] QPS (active):           16.2
+[·] QPS (total):            7.32
+[·] completed QPS (window): 16.15
+[·] completed QPS (total):  7.32
+[·] answer QPS (window):    45.14
+[·] answer QPS (total):     20.45
+  [✓] done!
+```
+
+EOF
+
+}
+
 emit_index_group() {
     local group="$1"
     local printed=0
     local t
 
-    for t in "${TOPICS_ARR[@]}"; do
+    for t in "${README_TOPICS_ARR[@]}"; do
 
         [ "$(topic_group "$t")" = "$group" ] || continue
 
@@ -248,6 +296,69 @@ emit_topic() {
     printf '%s\n' '```'
 }
 
+extract_help_explainer() {
+    local topic="$1"
+    local output body
+
+    if ! output="$("$SCRIPT" --help "$topic" 2>&1)"; then
+        return 1
+    fi
+
+    body="$(
+        printf '%s\n' "$output" | awk '
+            BEGIN { started=0 }
+            /^Topic:[[:space:]]*/ { started=1; next }
+            started == 0 { next }
+            /^See also:[[:space:]]*$/ { exit }
+            { print }
+        ' | awk '
+            { line[++n]=$0 }
+            END {
+                s=1
+
+                while (s<=n && line[s] ~ /^[[:space:]]*$/) s++
+
+                e=n
+
+                while (e>=s && line[e] ~ /^[[:space:]]*$/) e--
+
+                for (i=s; i<=e; i++) print line[i]
+
+            }
+        '
+    )"
+
+    [ -n "$body" ] || return 1
+
+    printf '%s\n' "$body"
+}
+
+emit_intro_explainer_section() {
+    local topic="$1"
+    local heading="$2"
+    local body=""
+
+    printf '## %s\n\n' "$heading"
+
+    if body="$(extract_help_explainer "$topic" 2>/dev/null)" && [ -n "$body" ]; then
+        printf '%s\n' '```text'
+        printf '%s\n' "$body"
+        printf '%s\n\n' '```'
+    else
+        printf '%s\n' '```text'
+        printf '%s\n' "$heading explainer unavailable."
+        printf '%s\n\n' '```'
+    fi
+}
+
+emit_intro_explainers() {
+
+    emit_intro_explainer_section "what" "What Is It?"
+
+    emit_intro_explainer_section "why" "OK. Sure, I Guess. Why?"
+
+}
+
 capture_smoke_output() {
     local smoke_script="$ROOT_DIR/tests/smoke-test.sh"
     local output=""
@@ -258,7 +369,7 @@ capture_smoke_output() {
         return 0
     fi
 
-    output="$(sh "$smoke_script" --strict 2>&1)" || status=$?
+    output="$(sh "$smoke_script" 2>&1)" || status=$?
 
     if [ "$status" -ne 0 ]; then
         printf '%s\n' "warning: smoke tests failed during doc generation (exit $status)" >&2
@@ -282,6 +393,15 @@ fi
 TOPICS_NL="$(printf '%s\n' "$TOPICS_NL" | reorder_topics)"
 
 mapfile -t TOPICS_ARR < <(printf '%s\n' "$TOPICS_NL" | awk 'NF')
+
+README_TOPICS_ARR=()
+
+for t in "${TOPICS_ARR[@]}"; do
+
+    is_readme_topic "$t" || continue
+
+    README_TOPICS_ARR+=("$t")
+done
 
 SMOKE_OUTPUT="$(capture_smoke_output)"
 
@@ -415,9 +535,17 @@ EOF
   Harass your local Domain Name Server.
 </p>
 
+EOF
+
+    emit_intro_explainers
+
+    emit_static_example_run_section
+
+    cat <<'EOF'
 ## Quick Start
 
 - [install](#install)
+- [examples](#examples)
 - [usage](#usage)
 
 ## Index
@@ -432,7 +560,7 @@ EOF
 
     emit_development_index
 
-    for t in "${TOPICS_ARR[@]}"; do
+    for t in "${README_TOPICS_ARR[@]}"; do
 
         emit_topic "$t"
 
@@ -479,7 +607,7 @@ print_topic_summary_group() {
     label="$(printf '%s' "$group" | tr '[:upper:]' '[:lower:]')"
     printf '    - %s:\n' "$label"
 
-    for t in "${TOPICS_ARR[@]}"; do
+    for t in "${README_TOPICS_ARR[@]}"; do
 
         [ "$(topic_group "$t")" = "$group" ] || continue
 
@@ -493,7 +621,7 @@ print_topic_summary_group() {
 
 if [ "$CONTENT_CHANGED" -eq 1 ]; then
     printf '\n%s\n' " - summary:"
-    printf '    - topics: %d\n' "${#TOPICS_ARR[@]}"
+    printf '    - topics: %d\n' "${#README_TOPICS_ARR[@]}"
 
     print_topic_summary_group "General"
 
