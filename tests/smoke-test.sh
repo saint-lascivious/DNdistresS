@@ -8,6 +8,10 @@ QUIET=0
 STRICT=0
 SUMMARY=0
 
+usage() {
+    printf 'Usage: %s [q|-q|quiet|--quiet] [s|-s|strict|--strict]\n' "${0##*/}"
+}
+
 while [ "$#" -gt 0 ]; do
 
     case "$1" in
@@ -18,13 +22,24 @@ while [ "$#" -gt 0 ]; do
             STRICT=1
             ;;
         h|-h|help|--help)
-            printf 'Usage: %s [q|-q|quiet|--quiet] [s|-s|strict|--strict]\n' "${0##*/}"
+
+            usage
+
             exit 0
             ;;
-        *)
+        --)
+            shift
+            break
+            ;;
+        -*)
             printf 'error: unknown option: %s\n' "$1" >&2
-            printf 'Usage: %s [q|-q|quiet|--quiet] [s|-s|strict|--strict]\n' "${0##*/}" >&2
+
+            usage >&2
+
             exit 2
+            ;;
+        *)
+            break
             ;;
     esac
 
@@ -40,6 +55,7 @@ SCRIPT="$ROOT_DIR/DNdistresS"
 
 pass=0
 fail=0
+skip_count=0
 
 ok() {
     pass=$((pass + 1))
@@ -53,6 +69,12 @@ not_ok() {
 
     [ "$SUMMARY" -eq 1 ] || printf ' - %s ✗\n' "$1"
 
+}
+
+skip() {
+    skip_count=$((skip_count + 1))
+
+    [ "$SUMMARY" -eq 1 ] || printf ' - %s ↷\n' "$1"
 }
 
 assert_eq() {
@@ -221,6 +243,7 @@ _SECTION_ACTIVE=0
 _SECTION_NAME=""
 _SECTION_PASS_START=0
 _SECTION_FAIL_START=0
+_SECTION_SKIP_START=0
 
 section_begin() {
     name="$1"
@@ -235,6 +258,7 @@ section_begin() {
     _SECTION_NAME="$name"
     _SECTION_PASS_START="$pass"
     _SECTION_FAIL_START="$fail"
+    _SECTION_SKIP_START="$skip_count"
 
     [ "$SUMMARY" -eq 1 ] || printf '\n[%s]\n' "$_SECTION_NAME"
 
@@ -245,16 +269,18 @@ section_end() {
 
     s_pass=$((pass - _SECTION_PASS_START))
     s_fail=$((fail - _SECTION_FAIL_START))
+    s_skip=$((skip_count - _SECTION_SKIP_START))
 
-    SECTION_REPORT="${SECTION_REPORT}${_SECTION_NAME}|${s_pass}|${s_fail}
+    SECTION_REPORT="${SECTION_REPORT}${_SECTION_NAME}|${s_pass}|${s_fail}|${s_skip}
 "
 
-    [ "$SUMMARY" -eq 1 ] || printf '   section: %s (pass=%s fail=%s)\n' "$_SECTION_NAME" "$s_pass" "$s_fail"
+    [ "$SUMMARY" -eq 1 ] || printf '   section: %s (pass=%s fail=%s skip=%s)\n' "$_SECTION_NAME" "$s_pass" "$s_fail" "$s_skip"
 
     _SECTION_ACTIVE=0
     _SECTION_NAME=""
     _SECTION_PASS_START=0
     _SECTION_FAIL_START=0
+    _SECTION_SKIP_START=0
 }
 
 print_section_report() {
@@ -264,63 +290,74 @@ print_section_report() {
     printf '\n[section summary]\n'
 
     printf '%s' "$SECTION_REPORT" | awk -F'|' '
-        NF >= 3 && $1 != "" {
+        NF >= 4 && $1 != "" {
             n++
             name[n]  = $1
             spass[n] = $2 + 0
             sfail[n] = $3 + 0
+            sskip[n] = $4 + 0
 
             total_pass += spass[n]
             total_fail += sfail[n]
+            total_skip += sskip[n]
 
             ln = length(name[n])
-            lp = length(spass[n])
+            lp = length(spass[n] "")
+            lf = length(sfail[n] "")
 
             if (ln > max_name) max_name = ln
 
             if (lp > max_pass) max_pass = lp
 
+            if (lf > max_fail) max_fail = lf
+
         }
+
         END {
-
-            if (length("total") > max_name) max_name = length("total")
-
-            if (length(total_pass) > max_pass) max_pass = length(total_pass)
+            tname = "total"
 
             for (i = 1; i <= n; i++) {
                 name_pad = max_name - length(name[i]) + 1
-                pass_pad = max_pass - length(spass[i]) + 1
 
-                printf " - %s:%*spass=%s%*sfail=%s\n",
+                printf " - %s:%*spass=%-*d  fail=%-*d skip=%d\n",
                        name[i], name_pad, "",
-                       spass[i], pass_pad, "",
-                       sfail[i]
+                       max_pass, spass[i],
+                       max_fail, sfail[i],
+                       sskip[i]
             }
 
-            printf "\n"
+            if (n > 0) printf "\n"
 
-            name_pad = max_name - length("total") + 1
-            pass_pad = max_pass - length(total_pass) + 1
+            name_pad = max_name - length(tname) + 1
 
-            printf " - total:%*spass=%s%*sfail=%s\n",
-                   name_pad, "",
-                   total_pass, pass_pad, "",
-                   total_fail
+            printf " - %s:%*spass=%d fail=%d skip=%d\n",
+                   tname, name_pad, "",
+                   total_pass, total_fail, total_skip
         }
     '
 
 }
 
 run_if_all_lib_funcs() {
+    missing=""
 
     while [ "$#" -gt 0 ]; do
-
         [ "$1" = "--" ] && shift && break
 
-        has_lib_func "$1" || return 0
+        if ! has_lib_func "$1"; then
+            missing="${missing}${missing:+, }$1"
+        fi
 
         shift
     done
+
+    if [ -n "$missing" ]; then
+        label="${1:-test-block}"
+
+        skip "${label} skipped (missing lib function(s): ${missing})"
+
+        return 0
+    fi
 
     "$@"
 
@@ -333,6 +370,10 @@ run_if_lib_func() {
     if has_lib_func "$fn"; then
         "$@"
     else
+        label="${1:-$fn}"
+
+        skip "${label} skipped (missing lib function: ${fn})"
+
         return 0
     fi
 
@@ -395,7 +436,6 @@ BEGIN {
             if (pat ~ /^\/.*\/$/) {
                 ftype[nf] = "regex"
                 fpat[nf]  = substr(pat, 2, length(pat) - 2)
-                gsub(/\\\./, "[.]", fpat[nf])
             } else if (substr(pat, 1, 2) == "||") {
                 ftype[nf] = "anchor"
                 fpat[nf]  = substr(pat, 3)
@@ -484,6 +524,20 @@ awk_rejects_invalid_dynamic_regex() (
     return 0
 )
 
+test_canonical_help_topic_aliases() {
+    assert_eq "canonical_help_topic maps --resolver-strategy" \
+        "$(run_in_lib canonical_help_topic --resolver-strategy)" "resolver-strategy"
+
+    assert_eq "canonical_help_topic maps log_mode" \
+        "$(run_in_lib canonical_help_topic log_mode)" "log-mode"
+
+    assert_eq "canonical_help_topic maps _DIG_OPTIONS_MODE" \
+        "$(run_in_lib canonical_help_topic _DIG_OPTIONS_MODE)" "dig-options-mode"
+
+    assert_fail_cmd "canonical_help_topic rejects unknown alias" \
+        run_in_lib canonical_help_topic definitely-not-a-topic
+}
+
 section_begin "help"
 
 assert_ok_cmd "script is executable" test -x "$SCRIPT"
@@ -503,11 +557,14 @@ qps|queries/sec
 random|Pool:
 burst|token bucket
 force-burst|Topic: force-burst
+resolver-strategy|resolver
 EOF
 
 assert_ok_cmd "help reverse parsing: --help -q" run_script_quiet --help -q
 
 assert_ok_cmd "help reverse parsing: -q --help" run_script_quiet -q --help
+
+run_if_lib_func canonical_help_topic test_canonical_help_topic_aliases
 
 section_end
 
@@ -521,20 +578,6 @@ run_timer_period() (
     timer_period_seconds
 
 )
-
-test_calendar_alias_seconds() {
-
-    assert_eq "calendar_alias_seconds: minutely" "$(run_in_lib calendar_alias_seconds minutely)" "60"
-
-    assert_eq "calendar_alias_seconds: hourly" "$(run_in_lib calendar_alias_seconds hourly)" "3600"
-
-    assert_eq "calendar_alias_seconds: daily" "$(run_in_lib calendar_alias_seconds daily)" "86400"
-
-    assert_eq "calendar_alias_seconds: weekly" "$(run_in_lib calendar_alias_seconds weekly)" "604800"
-
-    assert_fail_cmd "calendar_alias_seconds rejects unknown alias" run_in_lib calendar_alias_seconds "not-a-thing"
-
-}
 
 test_rand_int_range() {
     r="$(run_in_lib rand_int_range 5 10 2>/dev/null || true)"
@@ -588,14 +631,6 @@ test_is_port() {
 
 }
 
-test_is_absolute_path() {
-
-    assert_fail_cmd "is_absolute_path rejects relative paths" run_in_lib is_absolute_path "./relative"
-
-    assert_ok_cmd "is_absolute_path accepts absolute paths" run_in_lib is_absolute_path "/etc/hosts"
-
-}
-
 test_init_random_rr_pool() {
 
     assert_ok_cmd "init_random_rr_pool initializes pool" run_in_lib init_random_rr_pool
@@ -609,16 +644,6 @@ test_rr_type_from_id() {
     assert_eq "rr_type_from_id maps 28 to AAAA" "$(run_in_lib rr_type_from_id 28)" "AAAA"
 
     assert_fail_cmd "rr_type_from_id rejects invalid ID" run_in_lib rr_type_from_id 99999
-
-}
-
-test_parse_burst_opt() {
-
-    assert_ok_cmd "parse_burst_opt accepts positive integer" run_in_lib parse_burst_opt 32
-
-    assert_fail_cmd "parse_burst_opt rejects zero" run_in_lib parse_burst_opt 0
-
-    assert_fail_cmd "parse_burst_opt rejects negative" run_in_lib parse_burst_opt -5
 
 }
 
@@ -654,21 +679,17 @@ test_timer_period_seconds() {
 test_validate_and_build_dig_options() {
 
     if ! command -v dig >/dev/null 2>&1; then
-        ok "validate_and_build_dig_options skipped (dig unavailable)"
         return 0
     fi
 
     assert_fail_cmd "validate_and_build_dig_options rejects invalid mode" \
-        run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_SET=1; _DIG_OPTIONS_MODE=wat; _DIG_OPTIONS="+short"; _STRICT_DIG_OPTIONS=0; validate_and_build_dig_options'
+        run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_MODE=nope; validate_and_build_dig_options'
 
     # shellcheck disable=SC2016
     effective="$(run_in_lib eval '
         _BINARY=dig
-        _DIG_OPTIONS_SET=1
         _DIG_OPTIONS_MODE=append
-        _DIG_OPTIONS="+time=1"
-        _STRICT_DIG_OPTIONS=1
-        DIG_OPTIONS_EFFECTIVE=""
+        _DIG_OPTIONS="+time=2 +tries=1 custom-token"
         validate_and_build_dig_options
         printf "%s\n" "$DIG_OPTIONS_EFFECTIVE"
     ')"
@@ -677,10 +698,19 @@ test_validate_and_build_dig_options() {
         "$effective" "+short"
 
     assert_contains "validate_and_build_dig_options append keeps custom token" \
-        "$effective" "+time=1"
+        "$effective" "custom-token"
 
-    assert_fail_cmd "validate_and_build_dig_options strict replace requires +short" \
-        run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_SET=1; _DIG_OPTIONS_MODE=replace; _DIG_OPTIONS="+time=1"; _STRICT_DIG_OPTIONS=1; validate_and_build_dig_options'
+    # shellcheck disable=SC2016
+    effective_replace="$(run_in_lib eval '
+        _BINARY=dig
+        _DIG_OPTIONS_MODE=replace
+        _DIG_OPTIONS="+time=2 +tries=1"
+        validate_and_build_dig_options
+        printf "%s\n" "$DIG_OPTIONS_EFFECTIVE"
+    ')"
+
+    assert_contains "validate_and_build_dig_options replace auto-appends +short" \
+        "$effective_replace" "+short"
 }
 
 test_compute_runtime_metrics_behavior() {
@@ -758,6 +788,14 @@ test_is_ipv4_addr() {
     assert_ok_cmd "is_ipv4_addr validates valid IPv4" run_in_lib is_ipv4_addr "192.168.1.1"
 
     assert_fail_cmd "is_ipv4_addr rejects invalid IPv4" run_in_lib is_ipv4_addr "256.1.1.1"
+
+}
+
+test_is_valid_target_dir() {
+
+    assert_fail_cmd "is_valid_target_dir rejects relative paths" run_in_lib is_valid_target_dir "./relative"
+
+    assert_ok_cmd "is_valid_target_dir accepts absolute paths" run_in_lib is_valid_target_dir "/etc"
 
 }
 
@@ -869,6 +907,573 @@ test_apply_concurrency_safety_clamps() {
 
 }
 
+test_latency_stats_file() {
+    # shellcheck disable=SC2016
+    out_edges="$(run_in_lib eval '
+        f="${TMPDIR:-/tmp}/DNdistresS-latstats-edges.$$"
+        printf "%s\n" 10 20 30 40 100 > "$f"
+        latency_stats_file "$f" 0 50 edges1
+        rm -f "$f"
+    ' 2>/dev/null || true)"
+
+    out_edges_fmt="$(printf '%s\n' "$out_edges" | awk 'NF{printf "%s|%s|%s|%s\n",$1,$2,$3,$4; exit}')"
+
+    assert_eq "latency_stats_file edges1 trims min/max and reports stats" \
+        "$out_edges_fmt" "30.00|30|30|3"
+
+    # shellcheck disable=SC2016
+    out_pct="$(run_in_lib eval '
+        f="${TMPDIR:-/tmp}/DNdistresS-latstats-pct.$$"
+        printf "%s\n" 10 20 30 40 100 > "$f"
+        latency_stats_file "$f" 20 95 percent
+        rm -f "$f"
+    ' 2>/dev/null || true)"
+
+    out_pct_fmt="$(printf '%s\n' "$out_pct" | awk 'NF{printf "%s|%s|%s|%s\n",$1,$2,$3,$4; exit}')"
+
+    assert_eq "latency_stats_file percent mode trims and computes percentile" \
+        "$out_pct_fmt" "30.00|30|40|3"
+
+    assert_fail_cmd "latency_stats_file fails on unreadable file" \
+        run_in_lib latency_stats_file "/definitely/not/a/file"
+
+}
+
+test_resolver_targets_for_dispatch() {
+    out="$(run_in_lib eval '
+        _REMOTE_POOL="1.1.1.1#53
+8.8.8.8#53
+9.9.9.9#53"
+        _RESOLVER_STRATEGY=parallel
+        resolver_targets_for_dispatch remote | wc -l | tr -d " "
+    ' 2>/dev/null || true)"
+
+    assert_eq "resolver_targets_for_dispatch returns full pool in parallel mode" "$out" "3"
+
+}
+
+test_compute_dispatch_profile_parallel() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        _REMOTE_POOL="1.1.1.1#53
+8.8.8.8#53
+9.9.9.9#53"
+        _RESOLVER_STRATEGY=parallel
+        _BURST=2
+        _BURST_EFFECTIVE=2
+        _DIG_BATCH=1
+        _DIG_BATCH_SIZE=2
+        _DIG_BATCH_SIZE_EFFECTIVE=2
+        compute_dispatch_profile remote || exit 1
+        printf "%s|%s|%s|%s|%s|%s\n" \
+            "$DISPATCH_FANOUT" \
+            "$DISPATCH_TOKEN_COST" \
+            "$DISPATCH_BURST_LOGICAL" \
+            "$_BURST" \
+            "$_DIG_BATCH_SIZE_EFFECTIVE" \
+            "$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE"
+    ' 2>/dev/null || true)"
+
+    assert_eq "compute_dispatch_profile parallel applies global budget semantics" \
+        "$out" "3|3|1|3|3|1"
+}
+
+test_select_fastest_resolver() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        TMPD="${TMPDIR:-/tmp}/DNdistresS-fastest.$$"
+        mkdir -p "$TMPD"
+        TMPDIR="$TMPD"
+        domains="$TMPD/domains.txt"
+        printf "%s\n" example.com example.net > "$domains"
+
+        _TYPE=A
+        _RANDOM=0
+        _OUTPUT=quiet
+        _FASTEST_PROBE_COUNT=5
+        _FASTEST_PROBE_DOMAIN=random
+        _REMOTE_POOL="1.1.1.1#53
+9.9.9.9#53
+8.8.8.8#53"
+
+        FAKE_NOW=0
+
+        mono_ms() {
+            printf "%s\n" "$FAKE_NOW"
+        }
+
+        query_one() {
+            h="$4"
+
+            case "$h" in
+                1.1.1.1)
+                    FAKE_NOW=$((FAKE_NOW + 10))
+                    ;;
+                9.9.9.9)
+                    FAKE_NOW=$((FAKE_NOW + 20))
+                    ;;
+                8.8.8.8)
+                    FAKE_NOW=$((FAKE_NOW + 30))
+                    ;;
+                *)
+                    FAKE_NOW=$((FAKE_NOW + 50))
+                    ;;
+            esac
+
+            return 0
+        }
+
+        select_fastest_resolver remote "$domains" || exit 1
+        printf "%s|%s|%s\n" "$RESOLVER" "$_PORT" "$_REMOTE_POOL"
+
+        rm -rf "$TMPD"
+
+    ' 2>/dev/null || true)"
+
+    assert_eq "select_fastest_resolver picks lowest-latency endpoint" "$out" "1.1.1.1|53|1.1.1.1#53"
+
+}
+
+test_parse_resolver_cli_and_pool_helpers() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        _LOCAL_POOL=""
+        _REMOTE_POOL=""
+        _LOCATION="auto"
+        _LOCATION_FORCED=0
+        _LOCATION_EXPLICIT=0
+        _PORT=53
+        SEEN_L=0
+        SEEN_R=0
+
+        parse_resolver_cli_arg local --local "127.0.0.1,127.0.0.1#53,[::1]:54" || exit 1
+
+        printf "%s|%s|%s|%s|%s\n" \
+            "$(pool_count "$_LOCAL_POOL")" \
+            "$(pool_nth "$_LOCAL_POOL" 1)" \
+            "$(pool_nth "$_LOCAL_POOL" 2)" \
+            "$_PORT" \
+            "$_LOCATION"
+    ' 2>/dev/null || true)"
+
+    assert_eq "parse_resolver_cli_arg local list dedupes and sets location/port" \
+        "$out" "2|127.0.0.1#53|::1#54|54|local"
+
+    assert_fail_cmd "parse_resolver_cli_arg rejects malformed resolver token" \
+        run_in_lib eval 'parse_resolver_cli_arg local --local "[::1"'
+}
+
+test_validate_pool_for_mode_zoneid() {
+    assert_ok_cmd "validate_pool_for_mode local-strict allows link-local zone id" \
+        run_in_lib eval '_LOCAL_POOL="fe80::1%eth0#53"; validate_pool_for_mode local local-strict'
+
+    assert_fail_cmd "validate_pool_for_mode dns rejects zone id in local pool" \
+        run_in_lib eval '_LOCAL_POOL="fe80::1%eth0#53"; validate_pool_for_mode local dns'
+
+    assert_fail_cmd "validate_pool_for_mode dns rejects zone id in remote pool" \
+        run_in_lib eval '_REMOTE_POOL="fe80::1%eth0#53"; validate_pool_for_mode remote dns'
+
+    assert_ok_cmd "validate_pool_for_mode dns accepts global IPv6" \
+        run_in_lib eval '_REMOTE_POOL="2001:4860:4860::8888#53"; validate_pool_for_mode remote dns'
+}
+
+test_fetch_source_cache_lifecycle() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        t="${TMPDIR:-/tmp}/DNdistresS-fetch.$$"
+        mkdir -p "$t"
+
+        _FILE=""
+        _URL="https://example.invalid/source.txt"
+        _DIRECTORY="$t/cache"
+        _SECONDS=60
+
+        dl=0
+        download_file() { dl=$((dl + 1)); printf "payload-%s\n" "$dl" > "$2"; }
+        validate_zip_file() { return 0; }
+
+        now_idx=0
+        now_ms() {
+            now_idx=$((now_idx + 1))
+            case "$now_idx" in
+                1) printf "%s\n" 100000 ;;
+                2) printf "%s\n" 120000 ;;
+                3) printf "%s\n" 250000 ;;
+                4) printf "%s\n" 260000 ;;
+                5) printf "%s\n" 270000 ;;
+                *) printf "%s\n" 270000 ;;
+            esac
+        }
+
+        d1="$t/d1"; d2="$t/d2"; d3="$t/d3"; d4="$t/d4"; d5="$t/d5"
+
+        fetch_source "$d1" || exit 1
+        c1="$dl"
+
+        fetch_source "$d2" || exit 1
+        c2="$dl"
+
+        key="$(printf "%s\n" "$_URL" | cksum | awk "{ print \$1 }")"
+        printf "%s\n" "nope" > "$_DIRECTORY/$key.stamp"
+
+        fetch_source "$d3" || exit 1
+        c3="$dl"
+
+        _SECONDS=0
+
+        fetch_source "$d4" || exit 1
+        c4="$dl"
+
+        fetch_source "$d5" || exit 1
+        c5="$dl"
+
+        printf "%s|%s|%s|%s|%s\n" "$c1" "$c2" "$c3" "$c4" "$c5"
+
+        rm -rf "$t"
+    ' 2>/dev/null || true)"
+
+    assert_eq "fetch_source cache lifecycle (hit/stale/_SECONDS=0/stamp-parse-fail)" \
+        "$out" "1|1|2|3|4"
+}
+
+test_enforce_file_ceiling() {
+    # shellcheck disable=SC2016
+    assert_ok_cmd "enforce_file_ceiling passes when size == max" \
+        run_in_lib eval '
+            f="${TMPDIR:-/tmp}/DNdistresS-ceiling-ok.$$"
+            printf "%s" "12345" > "$f"
+            enforce_file_ceiling "$f" 5 "test"
+            rc=$?
+            rm -f "$f"
+            exit "$rc"
+        '
+
+    # shellcheck disable=SC2016
+    assert_fail_cmd "enforce_file_ceiling fails when size > max" \
+        run_in_lib eval '
+            f="${TMPDIR:-/tmp}/DNdistresS-ceiling-fail.$$"
+            printf "%s" "123456" > "$f"
+            enforce_file_ceiling "$f" 5 "test"
+            rc=$?
+            rm -f "$f"
+            exit "$rc"
+        '
+}
+
+test_max_domains_lines_ceiling_cli() {
+    if ! command -v dig >/dev/null 2>&1 && ! command -v nslookup >/dev/null 2>&1; then
+        skip "_MAX_DOMAINS_LINES CLI ceiling check skipped (dig/nslookup unavailable)"
+        return 0
+    fi
+
+    f="${TMPDIR:-/tmp}/DNdistresS-max-lines.$$"
+    printf '%s\n' "example.com" "example.net" > "$f"
+
+    assert_cmd_exit_code "_MAX_DOMAINS_LINES ceiling triggers EXIT_RUNTIME" 1 \
+        env _MAX_DOMAINS_LINES=1 "$SCRIPT" -f "$f" -F plain -t 2 -q 1 -D 1
+
+    rm -f "$f"
+}
+
+test_extract_domain_semantics() {
+    # shellcheck disable=SC2016
+    got_plain="$(run_in_lib eval '
+        _FORMAT=plain
+        _COLUMN=0
+        printf "%s\n" \
+            "Example.COM." \
+            "-bad.com" \
+            "ok-domain.org" \
+            "bad..dots" \
+            "a_b.example" \
+            "ok.net" \
+            | extract_domains | paste -sd, -
+    ' 2>/dev/null || true)"
+
+    assert_eq "extract_domains plain mode normalizes/trims/rejects invalid labels" \
+        "$got_plain" "example.com,ok-domain.org,ok.net"
+
+    # shellcheck disable=SC2016
+    got_custom="$(run_in_lib eval '
+        printf "%s\n" \
+            " Foo.com. #comment" \
+            "# full-line comment" \
+            "bad..x" \
+            "ok.net" \
+            | extract_custom_domains | paste -sd, -
+    ' 2>/dev/null || true)"
+
+    assert_eq "extract_custom_domains strips comments and normalizes" \
+        "$got_custom" "foo.com,ok.net"
+}
+
+test_fetch_source_lock_contention() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        t="${TMPDIR:-/tmp}/DNdistresS-fetch-lock.$$"
+        mkdir -p "$t"
+
+        _FILE=""
+        _URL="https://example.invalid/lock.txt"
+        _DIRECTORY="$t/cache"
+        _SECONDS=60
+
+        download_file() {
+            printf "%s\n" "payload" > "$2"
+        }
+
+        validate_zip_file() {
+            return 0
+        }
+
+        mkdir -p "$_DIRECTORY"
+
+        key="$(printf "%s\n" "$_URL" | cksum | awk "{ print \$1 }")"
+        lock="$_DIRECTORY/$key.lock.d"
+
+        mkdir -p "$lock"
+
+        ( sleep 0.2; rmdir "$lock" 2>/dev/null || true ) &
+
+        fetch_source "$t/out" || exit 1
+
+        [ -n "$FETCH_SOURCE_PATH" ] || exit 1
+
+        [ -f "$FETCH_SOURCE_PATH" ] || exit 1
+
+        printf "%s\n" "ok"
+
+        rm -rf "$t"
+    ' 2>/dev/null || true)"
+
+    assert_eq "fetch_source acquires lock after transient contention" "$out" "ok"
+
+}
+
+test_worker_pool_lifecycle_and_timeout() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        t="${TMPDIR:-/tmp}/DNdistresS-workers.$$"
+
+        mkdir -p "$t"
+
+        TMPDIR="$t"
+        ANSWERS_FILE="$t/answers.txt"
+        : > "$ANSWERS_FILE"
+
+        DRAIN_FORCED=0
+
+        query_one() {
+            d="$1"
+            out_file="$3"
+            printf "%s\n" "$d" >> "$out_file"
+            return 0
+        }
+
+        start_worker_pool 2 || exit 1
+
+        enqueue_job "A|example.com|127.0.0.1|53" || exit 1
+
+        enqueue_job "A|example.net|127.0.0.1|53" || exit 1
+
+        stop_worker_pool graceful 500 || exit 1
+
+        sum_completed_shards
+
+        first_completed="$COMPLETED"
+
+        start_worker_pool 1 || exit 1
+
+        pid="$WORKER_PIDS"
+
+        kill -STOP "$pid" 2>/dev/null || true
+
+        stop_worker_pool graceful 50 || exit 1
+
+        printf "%s|%s|%s\n" "$first_completed" "${DRAIN_FORCED:-0}" "$WORKER_COUNT"
+
+        rm -rf "$t"
+
+    ' 2>/dev/null || true)"
+
+    assert_eq "worker pool lifecycle and drain-timeout force path" "$out" "2|1|0"
+
+}
+
+test_cleanup_all_idempotent() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        t="${TMPDIR:-/tmp}/DNdistresS-cleanup.$$"
+
+        mkdir -p "$t"
+
+        TMPDIR="$t"
+        CLEANED=0
+        WORKER_PIDS=""
+        WORKER_FIFOS=""
+        WORKER_COUNT=0
+        WORKER_NEXT=1
+
+        FETCH_CACHE_TMP="$TMPDIR/pending.tmp"
+        : > "$FETCH_CACHE_TMP"
+
+        cleanup_all graceful 0 || exit 1
+
+        [ "$CLEANED" -eq 1 ] || exit 1
+
+        cleanup_all graceful 0 || exit 1
+
+        if [ -d "$TMPDIR" ]; then
+            printf "%s\n" "still-there"
+        else
+            printf "%s\n" "gone"
+        fi
+
+    ' 2>/dev/null || true)"
+
+    assert_eq "cleanup_all is idempotent and removes temp dir" "$out" "gone"
+
+}
+
+test_extract_zip_ceiling() {
+
+    if ! command -v zip >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+
+        skip "zip extract ceiling check skipped (zip/unzip unavailable)"
+
+        return 0
+    fi
+
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        t="${TMPDIR:-/tmp}/DNdistresS-zip-ceiling.$$"
+
+        mkdir -p "$t"
+
+        payload="$t/payload.txt"
+        printf "%s\n" "0123456789" > "$payload"
+
+        ( cd "$t" && zip -q src.zip payload.txt ) || exit 1
+
+        _MAX_EXTRACT_BYTES=5
+
+        if extract_zip_to_file "$t/src.zip" "$t/out.txt"; then
+            printf "%s\n" "unexpected-pass"
+        else
+            printf "%s\n" "expected-fail"
+        fi
+
+        rm -rf "$t"
+    ' 2>/dev/null || true)"
+
+    assert_eq "extract_zip_to_file enforces _MAX_EXTRACT_BYTES ceiling" "$out" "expected-fail"
+
+}
+
+test_on_abort_exit_code_cli() {
+
+    if ! command -v dig >/dev/null 2>&1 && ! command -v nslookup >/dev/null 2>&1; then
+
+        skip "abort signal contract skipped (dig/nslookup unavailable)"
+
+        return 0
+    fi
+
+    f="${TMPDIR:-/tmp}/DNdistresS-abort.$$"
+    printf '%s\n' "example.com" > "$f"
+
+    set +e
+    "$SCRIPT" -f "$f" -F plain -t 1 -q 1 -D 0 >/dev/null 2>&1 &
+    pid=$!
+
+    sleep 0.3
+
+    kill -INT "$pid" >/dev/null 2>&1 || true
+
+    waited=0
+
+    while kill -0 "$pid" >/dev/null 2>&1; do
+
+        sleep 0.1
+
+        waited=$((waited + 1))
+
+        [ "$waited" -lt 50 ] || break
+
+    done
+
+    if kill -0 "$pid" >/dev/null 2>&1; then
+        kill -KILL "$pid" >/dev/null 2>&1 || true
+    fi
+
+    wait "$pid"
+    rc=$?
+    set -e
+
+    rm -f "$f"
+
+    assert_eq "SIGINT abort path exits with 130" "$rc" "130"
+
+}
+
+test_stop_reason_exit_code_mapping_fault_injected() {
+
+    if command -v dig >/dev/null 2>&1; then
+        test_bin="dig"
+    elif command -v nslookup >/dev/null 2>&1; then
+        test_bin="nslookup"
+    else
+
+        skip "fault-injected stop-reason mapping skipped (dig/nslookup unavailable)"
+
+        return 0
+    fi
+
+    # shellcheck disable=SC2016
+    rc_resolver="$(run_in_lib eval '
+        _BINARY="'"$test_bin"'"
+
+        f="${TMPDIR:-/tmp}/DNdistresS-fi-resolver.$$"
+        printf "%s\n" "example.com" > "$f"
+
+        DNDISTRESS_TEST_FAULT_STOP_REASON="resolver-pick-fail"
+        DNDISTRESS_TEST_FAULT_USED=0
+
+        set +e
+        do_DNdistresS -f "$f" -F plain -t 1 -q 1 -D 1 >/dev/null 2>&1
+        rc=$?
+        set -e
+
+        rm -f "$f"
+
+        printf "%s\n" "$rc"
+    ' 2>/dev/null || true)"
+
+    assert_eq "fault-injected resolver-pick-fail maps to EXIT_RESOLVER" "$rc_resolver" "7"
+
+    # shellcheck disable=SC2016
+    rc_queue="$(run_in_lib eval '
+        _BINARY="'"$test_bin"'"
+
+        f="${TMPDIR:-/tmp}/DNdistresS-fi-queue.$$"
+        printf "%s\n" "example.com" > "$f"
+
+        DNDISTRESS_TEST_FAULT_STOP_REASON="queue-fail"
+        DNDISTRESS_TEST_FAULT_USED=0
+
+        set +e
+        do_DNdistresS -f "$f" -F plain -t 1 -q 1 -D 1 >/dev/null 2>&1
+        rc=$?
+        set -e
+
+        rm -f "$f"
+
+        printf "%s\n" "$rc"
+    ' 2>/dev/null || true)"
+
+    assert_eq "fault-injected queue-fail maps to EXIT_QUEUE" "$rc_queue" "8"
+}
+
 section_begin "randomness"
 
 run_if_lib_func rand_int_range test_rand_int_range
@@ -893,7 +1498,7 @@ run_if_lib_func is_local_ipv4 test_is_local_ipv4
 
 run_if_lib_func is_port test_is_port
 
-run_if_lib_func is_absolute_path test_is_absolute_path
+run_if_lib_func is_valid_target_dir test_is_valid_target_dir
 
 run_if_lib_func make_tmpdir test_make_tmpdir
 
@@ -907,21 +1512,39 @@ run_if_lib_func pick_query_type test_pick_query_type
 
 run_if_all_lib_funcs pick_query_type init_random_rr_pool -- test_pick_query_type_pool_override
 
+run_if_all_lib_funcs parse_resolver_cli_arg pool_count pool_nth append_pool_unique -- test_parse_resolver_cli_and_pool_helpers
+
+run_if_lib_func validate_pool_for_mode test_validate_pool_for_mode_zoneid
+
 run_if_lib_func parse_dns_opt test_parse_dns_opt
+
+run_if_lib_func latency_stats_file test_latency_stats_file
+
+run_if_lib_func resolver_targets_for_dispatch test_resolver_targets_for_dispatch
+
+run_if_lib_func compute_dispatch_profile test_compute_dispatch_profile_parallel
+
+run_if_lib_func select_fastest_resolver test_select_fastest_resolver
 
 section_end
 
 section_begin "lib-parsers"
 
-run_if_lib_func parse_burst_opt test_parse_burst_opt
+skip "parse_burst_opt coverage handled by CLI burst parsing checks"
 
 run_if_lib_func timer_period_seconds test_timer_period_seconds
 
-run_if_lib_func calendar_alias_seconds test_calendar_alias_seconds
+skip "calendar_alias_seconds covered indirectly via timer_period_seconds"
 
 run_if_lib_func compute_runtime_metrics test_compute_runtime_metrics_behavior
 
 run_if_lib_func validate_and_build_dig_options test_validate_and_build_dig_options
+
+run_if_lib_func fetch_source test_fetch_source_cache_lifecycle
+
+run_if_lib_func fetch_source test_fetch_source_lock_contention
+
+run_if_lib_func extract_domains test_extract_domain_semantics
 
 section_end
 
@@ -1027,6 +1650,7 @@ fi
 run_fail_matrix <<'EOF'
 CLI invalid --location value fails|--location nowhere
 CLI invalid --dig-options-mode value fails|--dig-options-mode nope
+CLI invalid --resolver-strategy value fails|--resolver-strategy nope
 random mode conflicts with TYPE MX|--random --type MX
 TYPE ANY is denied by default|-T ANY -f /dev/null -F plain -t 1 -q 1 -D 1
 TYPE 255 (ANY) is denied by default|-T 255 -f /dev/null -F plain -t 1 -q 1 -D 1
@@ -1037,6 +1661,12 @@ section_end
 section_begin "safety"
 
 run_if_lib_func apply_concurrency_safety_clamps test_apply_concurrency_safety_clamps
+
+run_if_lib_func enforce_file_ceiling test_enforce_file_ceiling
+
+run_if_lib_func extract_zip_to_file test_extract_zip_ceiling
+
+test_max_domains_lines_ceiling_cli
 
 section_end
 
@@ -1066,7 +1696,7 @@ if command -v dig >/dev/null 2>&1 || command -v nslookup >/dev/null 2>&1; then
     out="$("$SCRIPT" -V 5 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true)"
 
     assert_contains "auto-tune disabled emits trace skip log at V5" "$out" \
-        "auto-tune disabled; skipping"
+        "skipping auto-tune"
 
     out="$("$SCRIPT" --auto-tune -V 3 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true)"
 
@@ -1098,8 +1728,13 @@ else
 
 fi
 
-assert_ok_cmd "burst help shows QPS clamp rule" \
-    run_script_quiet --help burst
+burst_help_out="$("$SCRIPT" --help burst 2>&1 || true)"
+
+assert_contains "burst help mentions burst clamp concept" \
+    "$burst_help_out" "capped"
+
+assert_contains "burst help includes QPS clamp multiplier" \
+    "$burst_help_out" "_QPS * 2"
 
 assert_ok_cmd "burst option -B 50 parses without error" \
     run_script_quiet -B 50 --help burst
@@ -1107,8 +1742,10 @@ assert_ok_cmd "burst option -B 50 parses without error" \
 assert_ok_cmd "burst option -B 100! parses with force override" \
     run_script_quiet -B 100! --help burst
 
-assert_ok_cmd "force-burst help topic resolves correctly" \
-    run_script_quiet --help force-burst
+force_burst_help_out="$("$SCRIPT" --help force-burst 2>&1 || true)"
+
+assert_contains "force-burst help describes clamp override" \
+    "$force_burst_help_out" "Overrides the burst safety clamp"
 
 version_out="$("$SCRIPT" --version 2>&1 || true)"
 
@@ -1121,6 +1758,14 @@ assert_contains "show warranty shows warranty" "$warranty_out" "THERE IS NO WARR
 conditions_out="$("$SCRIPT" show c 2>&1)"
 
 assert_contains "show conditions shows conditions" "$conditions_out" "You may convey verbatim copies of the Program's source code as you"
+
+run_if_all_lib_funcs start_worker_pool enqueue_job stop_worker_pool sum_completed_shards -- test_worker_pool_lifecycle_and_timeout
+
+run_if_lib_func cleanup_all test_cleanup_all_idempotent
+
+run_if_lib_func do_DNdistresS test_stop_reason_exit_code_mapping_fault_injected
+
+test_on_abort_exit_code_cli
 
 section_end
 
@@ -1176,7 +1821,6 @@ if [ "$STRICT" -eq 1 ]; then
 
                 rc=$?
                 set -e
-
                 end="$(date +%s)"
                 elapsed=$((end - start))
 
