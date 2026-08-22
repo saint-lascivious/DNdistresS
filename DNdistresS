@@ -6,7 +6,7 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=0
 VERSION_MINOR=2
-VERSION_MICRO=0
+VERSION_MICRO=1
 VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
@@ -108,6 +108,62 @@ now_ms() {
 }
 
 SCRIPT_START="$(now_ms)"
+
+_SLEEP_FRACTIONAL_OK="${_SLEEP_FRACTIONAL_OK:--1}"
+
+init_sleep_capability() {
+
+    case "$_SLEEP_FRACTIONAL_OK" in
+        0|1)
+            return 0
+            ;;
+    esac
+
+    if sleep 0.01 2>/dev/null; then
+        _SLEEP_FRACTIONAL_OK=1
+    else
+        _SLEEP_FRACTIONAL_OK=0
+    fi
+
+}
+
+sleep_ms() {
+    ms="${1:-0}"
+
+    case "$ms" in
+        ''|*[!0-9]*)
+            ms=0
+            ;;
+    esac
+
+    [ "$ms" -gt 0 ] || return 0
+
+    init_sleep_capability
+
+    if [ "$_SLEEP_FRACTIONAL_OK" -eq 1 ]; then
+        s=$((ms / 1000))
+        rem=$((ms % 1000))
+
+        if [ "$rem" -eq 0 ]; then
+
+            sleep "$s"
+
+        else
+
+            sleep "$s.$(printf '%03d' "$rem")"
+
+        fi
+
+        return 0
+    fi
+
+    sec=$(((ms + 999) / 1000))
+
+    [ "$sec" -ge 1 ] || sec=1
+
+    sleep "$sec"
+
+}
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1
@@ -2141,7 +2197,12 @@ validate_and_build_dig_options() {
         fi
 
         case "$tok" in
-            @*|-p|-p=*|-q|-q=*|-t|-t=*|-x|-x=*|-f|-f=*)
+            @*|\
+            -p|-p=*|-p?*|\
+            -q|-q=*|-q?*|\
+            -t|-t=*|-t?*|\
+            -x|-x=*|-x?*|\
+            -f|-f=*|-f?*)
                 bad="${bad:+$bad }$tok"
 
                 case "$tok" in
@@ -3375,7 +3436,7 @@ fetch_source() {
             return 1
         }
 
-        sleep 0.05
+        sleep_ms 50
 
     done
 
@@ -7364,7 +7425,7 @@ stop_worker_pool() {
                         kill -TERM "$p" 2>/dev/null || true
                     done
 
-                    sleep 0.1
+                    sleep_ms 100
 
                     for p in $WORKER_PIDS; do
                         kill -KILL "$p" 2>/dev/null || true
@@ -7373,7 +7434,7 @@ stop_worker_pool() {
                     break
                 fi
 
-                sleep 0.1
+                sleep_ms 100
 
             done
 
@@ -7409,7 +7470,8 @@ stop_worker_pool() {
 
                 [ "$waited_force_ms" -ge "$force_grace_ms" ] && break
 
-                sleep 0.02
+                sleep_ms 20
+
             done
 
         fi
@@ -7483,7 +7545,7 @@ cleanup_all() {
 
                     log 2 "cleanup: temp dir not empty, retrying"
 
-                    sleep 0.1
+                    sleep_ms 100
 
                     rm -fr "$TMPDIR" 2>/dev/null || log 1 "cleanup: failed to remove temp dir ${LIGHT_GREY}$TMPDIR${RED}"
 
@@ -7879,31 +7941,14 @@ next_domain() {
 nap_for_tokens() {
     deficit_ms="${1:-1}"
 
-    if [ "${SLEEP_TINY_OK:-0}" -eq 1 ]; then
+    case "$deficit_ms" in
+        ''|*[!0-9]*|0)
+            deficit_ms=1
+            ;;
+    esac
 
-        if [ "$deficit_ms" -le 10 ]; then
+    sleep_ms "$deficit_ms"
 
-            sleep 0.01
-
-        elif [ "$deficit_ms" -le 20 ]; then
-
-            sleep 0.02
-
-        elif [ "$deficit_ms" -le 50 ]; then
-
-            sleep 0.05
-
-        else
-
-            sleep 0.1
-
-        fi
-
-    else
-
-        sleep 1
-
-    fi
 }
 
 apply_concurrency_safety_clamps() {
@@ -9516,6 +9561,10 @@ do_DNdistresS() {
         {
             d = $0
 
+            if (d == "") next
+
+            if (seen[d]++) next
+
             if (nf == 0) {
                 emit_domain(d)
                 next
@@ -9557,6 +9606,7 @@ do_DNdistresS() {
                     }
 
                 }
+
             }
 
             if (matched) emit_domain(d)
@@ -9643,11 +9693,7 @@ do_DNdistresS() {
 
     }
 
-    SLEEP_TINY_OK=0
-
-    if sleep 0.01 2>/dev/null; then
-        SLEEP_TINY_OK=1
-    fi
+    init_sleep_capability
 
     start_worker_pool "$_MAXIMUM" || exit_with_status "$EXIT_QUEUE"
 
