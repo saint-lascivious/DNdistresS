@@ -302,37 +302,54 @@ print_section_report() {
             total_skip += sskip[n]
 
             ln = length(name[n])
-            lp = length(spass[n] "")
-            lf = length(sfail[n] "")
-
             if (ln > max_name) max_name = ln
 
+            lp = length(spass[n] "")
+            lf = length(sfail[n] "")
+            ls = length(sskip[n] "")
+
             if (lp > max_pass) max_pass = lp
-
             if (lf > max_fail) max_fail = lf
-
+            if (ls > max_skip) max_skip = ls
         }
 
         END {
             tname = "total"
+            if (length(tname) > max_name) max_name = length(tname)
+
+            lp = length(total_pass "")
+            lf = length(total_fail "")
+            ls = length(total_skip "")
+
+            if (lp > max_pass) max_pass = lp
+            if (lf > max_fail) max_fail = lf
+            if (ls > max_skip) max_skip = ls
 
             for (i = 1; i <= n; i++) {
                 name_pad = max_name - length(name[i]) + 1
+                p = spass[i] ""
+                f = sfail[i] ""
+                s = sskip[i] ""
 
-                printf " - %s:%*spass=%-*d  fail=%-*d skip=%d\n",
+                printf " - %s:%*spass=%-*s fail=%-*s skip=%-*s\n",
                        name[i], name_pad, "",
-                       max_pass, spass[i],
-                       max_fail, sfail[i],
-                       sskip[i]
+                       max_pass, p,
+                       max_fail, f,
+                       max_skip, s
             }
 
             if (n > 0) printf "\n"
 
             name_pad = max_name - length(tname) + 1
+            p = total_pass ""
+            f = total_fail ""
+            s = total_skip ""
 
-            printf " - %s:%*spass=%d fail=%d skip=%d\n",
+            printf " - %s:%*spass=%-*s fail=%-*s skip=%-*s\n",
                    tname, name_pad, "",
-                   total_pass, total_fail, total_skip
+                   max_pass, p,
+                   max_fail, f,
+                   max_skip, s
         }
     '
 
@@ -684,6 +701,15 @@ test_validate_and_build_dig_options() {
 
     assert_fail_cmd "validate_and_build_dig_options rejects invalid mode" \
         run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_MODE=nope; validate_and_build_dig_options'
+
+    assert_fail_cmd "validate_and_build_dig_options rejects compact -p53" \
+        run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_MODE=replace; _DIG_OPTIONS="-p53 +time=1"; validate_and_build_dig_options'
+
+    assert_fail_cmd "validate_and_build_dig_options rejects compact -qname" \
+        run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_MODE=replace; _DIG_OPTIONS="-qexample.com +time=1"; validate_and_build_dig_options'
+
+    assert_fail_cmd "validate_and_build_dig_options rejects compact -tA" \
+        run_in_lib eval '_BINARY=dig; _DIG_OPTIONS_MODE=replace; _DIG_OPTIONS="-tA +time=1"; validate_and_build_dig_options'
 
     # shellcheck disable=SC2016
     effective="$(run_in_lib eval '
@@ -1474,6 +1500,31 @@ test_stop_reason_exit_code_mapping_fault_injected() {
     assert_eq "fault-injected queue-fail maps to EXIT_QUEUE" "$rc_queue" "8"
 }
 
+test_domain_dedupe_before_top() {
+    got="$(
+
+        awk -v top=2 '
+            NF {
+                d=$0
+
+                if (seen[d]++) next
+
+                print d
+
+                if (++c >= top) exit
+            }
+        ' <<'EOF' | paste -sd, -
+example.com
+example.com
+example.net
+example.org
+EOF
+    )"
+
+    assert_eq "domain pipeline dedupes before top cutoff" "$got" "example.com,example.net"
+
+}
+
 section_begin "randomness"
 
 run_if_lib_func rand_int_range test_rand_int_range
@@ -1618,6 +1669,8 @@ else
     printf "  functions unavailable after refactor\n"
 
 fi
+
+test_domain_dedupe_before_top
 
 assert_eq "filter no filters returns all" "$(run_filter_count '')" "6"
 
