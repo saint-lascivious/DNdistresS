@@ -1,6 +1,6 @@
 # strict.d
 
-`tests/run-strict.sh` executes `tests/strict.d/*.sh` in lexical order.
+`tests/smoke-test.sh` executes `tests/strict.d/*.sh` in lexical order.
 
 ## Purpose
 
