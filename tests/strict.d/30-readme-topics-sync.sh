@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# readme-topics-sync.sh - checks README topic headings vs SCRIPT --help topics.
+# readme-topics-sync.sh - checks README topic headings vs SCRIPT --help topics
 
 set -eu
 

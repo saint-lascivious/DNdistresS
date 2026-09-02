@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# orphans.sh - finds defined but unreferenced functions in DNdistresS.
+# orphans.sh - finds defined but unreferenced functions in DNdistresS
 
 set -eu
 

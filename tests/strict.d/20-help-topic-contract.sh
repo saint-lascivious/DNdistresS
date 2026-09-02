@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# help-topic-contract.sh - every advertised topic must resolve via --help <topic>.
+# help-topic-contract.sh - every advertised topic must resolve via --help <topic>
 
 set -eu
 

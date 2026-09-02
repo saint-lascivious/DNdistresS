@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# exit-code-contract.sh - deterministic exit code contract checks.
+# exit-code-contract.sh - deterministic exit code contract checks
 
 set -eu
 

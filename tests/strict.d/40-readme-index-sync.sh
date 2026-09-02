@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# readme-index-sync.sh - checks README Index anchors vs SCRIPT --help topics.
+# readme-index-sync.sh - checks README Index anchors vs SCRIPT --help topics
 
 set -eu
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# 50-mode-scope-contract.sh - mode-scoped flags must fail outside scope.
+# 50-mode-scope-contract.sh - mode-scoped flags must fail outside scope
 
 set -eu
 

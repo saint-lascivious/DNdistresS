@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# 60-mode-exclusivity-contract.sh - command modes exclusive with run modes.
+# 60-mode-exclusivity-contract.sh - command modes exclusive with run modes
 
 set -eu
 
