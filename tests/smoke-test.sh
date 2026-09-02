@@ -551,6 +551,9 @@ test_canonical_help_topic_aliases() {
     assert_eq "canonical_help_topic maps _DIG_OPTIONS_MODE" \
         "$(run_in_lib canonical_help_topic _DIG_OPTIONS_MODE)" "dig-options-mode"
 
+    assert_eq "canonical_help_topic maps --purge" \
+        "$(run_in_lib canonical_help_topic --purge)" "purge"
+
     assert_fail_cmd "canonical_help_topic rejects unknown alias" \
         run_in_lib canonical_help_topic definitely-not-a-topic
 }
@@ -575,6 +578,7 @@ random|Pool:
 burst|token bucket
 force-burst|Topic: force-burst
 resolver-strategy|resolver
+purge|Topic: purge
 EOF
 
 assert_ok_cmd "help reverse parsing: --help -q" run_script_quiet --help -q
@@ -1707,6 +1711,7 @@ CLI invalid --resolver-strategy value fails|--resolver-strategy nope
 random mode conflicts with TYPE MX|--random --type MX
 TYPE ANY is denied by default|-T ANY -f /dev/null -F plain -t 1 -q 1 -D 1
 TYPE 255 (ANY) is denied by default|-T 255 -f /dev/null -F plain -t 1 -q 1 -D 1
+--purge rejected outside uninstall scope|--purge --version
 EOF
 
 section_end
