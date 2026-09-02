@@ -7,9 +7,9 @@ set -eu
 NAME="DNdistresS"
 
 VERSION_MAJOR=0
-VERSION_MINOR=3
+VERSION_MINOR=4
 VERSION_MICRO=0
-VERSION_PICO_STRING="-1.0-rc0"
+VERSION_PICO_STRING="-1.0-rc1"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
@@ -286,6 +286,7 @@ fi
 _CUSTOM="${_CUSTOM:-${_DIRECTORY}/custom.txt}"
 _INSTALL="${_INSTALL:-/usr/local/bin}"
 _UNINSTALL="${_UNINSTALL:-/usr/local/bin}"
+_PURGE="${_PURGE:-0}"
 
 SERVICE_DIR="${SERVICE_DIR:-/etc/systemd/system}"
 UNIT_BASE="${UNIT_BASE:-DNdistresS}"
@@ -316,6 +317,7 @@ SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
     [--dig-options-mode append|replace]
     [--with-systemd|--without-systemd]
     [--with-bash-completion|--without-bash-completion]
+    [--purge]
 '
 
 colourset() {
@@ -2480,6 +2482,8 @@ require_bool01 "_WITH_SYSTEMD" "$_WITH_SYSTEMD"
 
 require_bool01 "_WITH_BASH_COMPLETION" "$_WITH_BASH_COMPLETION"
 
+require_bool01 "_PURGE" "$_PURGE"
+
 is_valid_target_dir() {
     p="$1"
 
@@ -2596,6 +2600,7 @@ as_root_or_sudo() {
             _VERBOSITY="$_VERBOSITY" \
             _WITH_SYSTEMD="$_WITH_SYSTEMD" \
             _WITH_BASH_COMPLETION="$_WITH_BASH_COMPLETION" \
+            _PURGE="${_PURGE:-0}" \
             COMPLETION_DIR="${COMPLETION_DIR:-}" \
             SERVICE_DIR="$SERVICE_DIR" \
             UNIT_BASE="$UNIT_BASE" \
@@ -2825,7 +2830,7 @@ _DNdistresS_completion() {
     local common_opts="-h --help -V --verbosity"
     local mode_switch_opts="-i --install -u --uninstall -S --show \
         --show-warranty --show-conditions -v --version --full --with-systemd \
-        --without-systemd --with-bash-completion --without-bash-completion"
+        --without-systemd --with-bash-completion --without-bash-completion --purge"
 
     local run_opts="-b -B -c -C -d -D -f -F -l -L -m -o -p -q -r -R -s -t -T \
         -U --allow-any --auto-tune --batch --binary --burst --column --custom --deny-any \
@@ -3002,7 +3007,7 @@ _DNdistresS_completion() {
         -u|--uninstall)
 
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion --purge" -- "$cur") )
             else
                 _filedir -d
             fi
@@ -3066,7 +3071,7 @@ _DNdistresS_completion() {
             if [[ "$has_mode_path" -eq 0 ]]; then
 
                 if [[ "$cur" == -* ]]; then
-                    COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion --purge" -- "$cur") )
                 else
                     _filedir -d
                 fi
@@ -3074,7 +3079,7 @@ _DNdistresS_completion() {
                 return 0
             fi
 
-            COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$common_opts --with-systemd --without-systemd --with-bash-completion --without-bash-completion --purge" -- "$cur") )
             return 0
             ;;
         version|help)
@@ -3362,6 +3367,87 @@ do_uninstall() {
         log 3 "skipping binary uninstall"
 
         log 3 "binary not present: ${LIGHT_GREY}$binary_path"
+
+    fi
+
+    if [ "${_PURGE:-0}" -eq 1 ]; then
+
+        log 3 "purge requested: removing cache/state/runtime artefacts"
+
+        purge_dir_if_dedicated() {
+            _label="$1"
+            _dir="$2"
+
+            case "$_dir" in
+                /|/var|/var/lib|/var/cache|/var/lock|/run|/etc|/usr|/home|/root|''|.)
+
+                    log 2 "refusing to purge shared/system path for ${LIGHT_GREY}${_label}${YELLOW}: ${LIGHT_GREY}${_dir}"
+
+                    return 1
+                    ;;
+            esac
+
+            [ -d "$_dir" ] || {
+
+                log 3 "skipping ${_label} purge"
+
+                log 3 "${_label} directory not present: ${LIGHT_GREY}$_dir"
+
+                return 0
+            }
+
+            rm -rf "$_dir" || {
+
+                log 1 "failed to purge ${_label} directory: ${LIGHT_GREY}$_dir"
+
+                return 1
+            }
+
+            log 3 "purged ${_label}: ${LIGHT_GREY}$_dir"
+
+            return 0
+        }
+
+        case "${_DIRECTORY:-}" in
+            "$DEFAULT_ROOT_DIRECTORY"|"${XDG_CACHE_HOME:-${HOME:-}/.cache}/DNdistresS")
+
+                purge_dir_if_dedicated "cache" "${_DIRECTORY:-$DEFAULT_ROOT_DIRECTORY}"
+
+                ;;
+            *)
+
+                log 3 "skipping cache purge"
+
+                log 3 "_DIRECTORY does not match a known default, leaving untouched: ${LIGHT_GREY}${_DIRECTORY:-"(unset)"}"
+
+                ;;
+        esac
+
+        purge_dir_if_dedicated "state" "$DEFAULT_STATE_ROOT"
+
+        purge_dir_if_dedicated "runtime" "$DEFAULT_RUNTIME_ROOT"
+
+        case "${_LOCK_FILE:-}" in
+            ''|/var/lock|/run)
+                ;;
+            *)
+
+                if [ -e "$_LOCK_FILE" ]; then
+
+                    rm -f "$_LOCK_FILE" || true
+
+                    log 3 "removed lock file: ${LIGHT_GREY}$_LOCK_FILE"
+
+                fi
+
+                ;;
+        esac
+
+    else
+
+        log 3 "skipping cache/state/runtime purge (default)"
+
+        log 3 "use ${LIGHT_GREY}--purge ${BLUE}to remove cache, status, and runtime artefacts"
 
     fi
 
@@ -4518,7 +4604,7 @@ is_cli_option_token() {
         -u|u|--uninstall|uninstall|--with-systemd|--without-systemd|\
         --with-bash-completion|--without-bash-completion|-U|U|--url|url|\
         -V|V|--verbosity|verbosity|--dig-options|dig-options|--dig-options-mode|\
-        dig-options-mode|--resolver-strategy|resolver-strategy)
+        dig-options-mode|--resolver-strategy|resolver-strategy|--purge|purge)
             return 0
             ;;
         *)
@@ -4537,7 +4623,7 @@ help_topics_list() {
         strict-dig-options directory duration file format local location \
         maximum force-maximum output port qps random remote seconds top type \
         deny-any allow-any url verbosity log-mode clock-tick-ms \
-        drain-timeout-ms full with-systemd with-bash-completion
+        drain-timeout-ms full with-systemd with-bash-completion purge
 }
 
 help_topics() {
@@ -4558,7 +4644,7 @@ help_topics() {
         "    local location maximum force-maximum output port qps random remote" \
         "    resolver-strategy seconds top type deny-any allow-any url verbosity" \
         "    log-mode clock-tick-ms drain-timeout-ms with-systemd with-bash-completion" \
-        "    full" \
+        "    full purge" \
         "" \
         "  Aliases:" \
         "    -h/--help, -v/--version, -S/--show, -b/--binary, -B/--burst, -c/--column" \
@@ -5637,6 +5723,7 @@ User-facing switches / env vars:
 
   _INSTALL   -i, --install   $_INSTALL
   _UNINSTALL -u, --uninstall $_UNINSTALL
+  _PURGE     --purge         $_PURGE
 
   _STATUS_ENABLED $_STATUS_ENABLED
   _STATUS_DIR     $_STATUS_DIR
@@ -5873,6 +5960,46 @@ See also:
   --help install
   --help with-systemd
   --help with-bash-completion
+  --help purge
+EOF
+
+            ;;
+        purge)
+
+            help_topic_header "purge"
+
+            cat <<EOF
+Meaning:
+  Extends uninstall to additionally remove cache, status, and runtime
+  artefacts created by DNdistresS.
+
+Flag:
+  --purge
+
+Applies to:
+  uninstall only.
+
+Removes, if present and dedicated to DNdistresS:
+  - Cache directory (\$_DIRECTORY, when it matches a known default)
+  - State directory (\$DEFAULT_STATE_ROOT, e.g. $DEFAULT_STATE_ROOT)
+  - Runtime directory (\$DEFAULT_RUNTIME_ROOT, e.g. $DEFAULT_RUNTIME_ROOT)
+  - Standalone lock file (\$_LOCK_FILE), if not inside a shared system path
+
+Default behaviour (without --purge):
+  Only the script, bash completion, and systemd units are removed.
+  Cache/status/runtime data is left untouched.
+
+Safety:
+  --purge refuses to remove shared/system directories (e.g. /var/lib,
+  /var/cache, /var/lock, /run, /etc) even if variables happen to point at
+  them; it only removes paths that match known dedicated DNdistresS
+  defaults.
+
+See also:
+  --help uninstall
+  --help status
+  --help directory
+  --help environment
 EOF
 
             ;;
@@ -6917,6 +7044,9 @@ canonical_help_topic() {
             ;;
         with-bash-completion|--with-bash-completion|without-bash-completion|--without-bash-completion)
             printf '%s\n' "with-bash-completion"
+            ;;
+        purge|--purge)
+            printf '%s\n' "purge"
             ;;
         show|-S|S|--show|--show-warranty|--show-conditions)
             printf '%s\n' "show"
@@ -9086,6 +9216,10 @@ do_DNdistresS() {
                 _WITH_BASH_COMPLETION=0
                 shift
                 ;;
+            --purge|purge)
+                _PURGE=1
+                shift
+                ;;
             -U|U|--url|url)
                 SEEN_NONEXCLUSIVE=1
 
@@ -9209,6 +9343,21 @@ do_DNdistresS() {
             *)
 
                 log 1 "${LIGHT_GREY}--with-bash-completion${RED}/${LIGHT_GREY}--without-bash-completion${RED} only apply to ${LIGHT_GREY}install${RED}/${LIGHT_GREY}uninstall"
+
+                invalid_mode_scope=1
+                ;;
+        esac
+
+    fi
+
+    if [ "$_PURGE" -eq 1 ]; then
+
+        case "$_MODE" in
+            uninstall)
+                ;;
+            *)
+
+                log 1 "${LIGHT_GREY}--purge${RED} only applies to uninstall"
 
                 invalid_mode_scope=1
                 ;;
