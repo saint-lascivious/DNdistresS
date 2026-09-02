@@ -1,21 +1,23 @@
 #!/bin/sh
 
+# DNdistresS - harass your local Domain Name Server
+
 set -eu
 
 NAME="DNdistresS"
 
 VERSION_MAJOR=0
-VERSION_MINOR=2
-VERSION_MICRO=2
-VERSION_PICO_STRING=""
+VERSION_MINOR=3
+VERSION_MICRO=0
+VERSION_PICO_STRING="-1.0-rc0"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-08-22"
+RELEASE_DATE="2026-09-02 NZST"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
-COPYRIGHT_YEAR="(C) 2026"
+COPYRIGHT="(C) 2026"
 AUTHOR_NAME="saint-lascivious, (Hayden Pearce)"
 
 EXIT_OK=0
@@ -440,55 +442,6 @@ log_apply_level_style() {
 log() {
     lvl="${1:-3}"
 
-    shift || true
-
-    msg="${*:-}"
-
-    case "$lvl" in
-        0|critical|CRITICAL)
-            n=0
-            pfx="${LIGHT_GREY}[${BOLD}${RED}!${NONE}${LIGHT_GREY}]${NONE}"
-            pri="user.crit"
-            base="${RED}"
-            ;;
-        1|error|ERROR)
-            n=1
-            pfx="${LIGHT_GREY}[${RED}✗${LIGHT_GREY}]${NONE}"
-            pri="user.err"
-            base="${RED}"
-            ;;
-        2|warning|WARNING|warn|WARN)
-            n=2
-            pfx="${LIGHT_GREY}[${YELLOW}▲${LIGHT_GREY}]${NONE}"
-            pri="user.warning"
-            base="${YELLOW}"
-            ;;
-        3|info|INFO)
-            n=3
-            pfx="${LIGHT_GREY}[${ITALIC}${BLUE}i${NONE}${LIGHT_GREY}]${NONE}"
-            pri="user.info"
-            base="${BLUE}"
-            ;;
-        4|debug|DEBUG)
-            n=4
-            pfx="${LIGHT_GREY}[${GREY}•${LIGHT_GREY}]${NONE}"
-            pri="user.debug"
-            base="${GREY}"
-            ;;
-        5|trace|TRACE)
-            n=5
-            pfx="${LIGHT_GREY}[${GREY}◦${LIGHT_GREY}]${NONE}"
-            pri="user.debug"
-            base="${GREY}"
-            ;;
-        *)
-            n=2
-            pfx="${LIGHT_GREY}[${BLUE}?${LIGHT_GREY}]${NONE}"
-            pri="user.warning"
-            base="${YELLOW}"
-            ;;
-    esac
-
     case "${_VERBOSITY:-0}" in
         0|1|2|3|4|5)
             v="${_VERBOSITY}"
@@ -498,7 +451,73 @@ log() {
             ;;
     esac
 
+    case "$lvl" in
+        0|critical|CRITICAL)
+            n=0
+            ;;
+        1|error|ERROR)
+            n=1
+            ;;
+        2|warning|WARNING|warn|WARN)
+            n=2
+            ;;
+        3|info|INFO)
+            n=3
+            ;;
+        4|debug|DEBUG)
+            n=4
+            ;;
+        5|trace|TRACE)
+            n=5
+            ;;
+        *)
+            n=2
+            ;;
+    esac
+
     [ "$v" -ge "$n" ] || return 0
+
+    shift || true
+
+    msg="${*:-}"
+
+    case "$lvl" in
+        0|critical|CRITICAL)
+            pfx="${LIGHT_GREY}[${BOLD}${RED}!${NONE}${LIGHT_GREY}]${NONE}"
+            pri="user.crit"
+            base="${RED}"
+            ;;
+        1|error|ERROR)
+            pfx="${LIGHT_GREY}[${RED}✗${LIGHT_GREY}]${NONE}"
+            pri="user.err"
+            base="${RED}"
+            ;;
+        2|warning|WARNING|warn|WARN)
+            pfx="${LIGHT_GREY}[${YELLOW}▲${LIGHT_GREY}]${NONE}"
+            pri="user.warning"
+            base="${YELLOW}"
+            ;;
+        3|info|INFO)
+            pfx="${LIGHT_GREY}[${ITALIC}${BLUE}i${NONE}${LIGHT_GREY}]${NONE}"
+            pri="user.info"
+            base="${BLUE}"
+            ;;
+        4|debug|DEBUG)
+            pfx="${LIGHT_GREY}[${GREY}•${LIGHT_GREY}]${NONE}"
+            pri="user.debug"
+            base="${GREY}"
+            ;;
+        5|trace|TRACE)
+            pfx="${LIGHT_GREY}[${GREY}◦${LIGHT_GREY}]${NONE}"
+            pri="user.debug"
+            base="${GREY}"
+            ;;
+        *)
+            pfx="${LIGHT_GREY}[${BLUE}?${LIGHT_GREY}]${NONE}"
+            pri="user.warning"
+            base="${YELLOW}"
+            ;;
+    esac
 
     do_stderr=0
     do_logger=0
@@ -2577,6 +2596,7 @@ as_root_or_sudo() {
             _VERBOSITY="$_VERBOSITY" \
             _WITH_SYSTEMD="$_WITH_SYSTEMD" \
             _WITH_BASH_COMPLETION="$_WITH_BASH_COMPLETION" \
+            COMPLETION_DIR="${COMPLETION_DIR:-}" \
             SERVICE_DIR="$SERVICE_DIR" \
             UNIT_BASE="$UNIT_BASE" \
             DEFAULT_ROOT_DIRECTORY="$DEFAULT_ROOT_DIRECTORY" \
@@ -2698,7 +2718,40 @@ EOF
 }
 
 COMPLETION_BASENAME="DNdistresS"
-COMPLETION_DIR="${COMPLETION_DIR:-/etc/bash_completion.d}"
+COMPLETION_DIR="${COMPLETION_DIR:-}"
+
+resolve_completion_dir() {
+
+    if [ -n "${COMPLETION_DIR:-}" ]; then
+        printf '%s\n' "$COMPLETION_DIR"
+        return 0
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+
+        for d in \
+            /usr/share/bash-completion/completions \
+            /usr/local/share/bash-completion/completions \
+            /etc/bash_completion.d \
+            /usr/local/etc/bash_completion.d
+        do
+
+            [ -d "$d" ] || continue
+
+            printf '%s\n' "$d"
+            return 0
+        done
+
+        printf '%s\n' "/etc/bash_completion.d"
+        return 0
+    fi
+
+    base="${XDG_DATA_HOME:-${HOME:-}/.local/share}"
+
+    [ -n "$base" ] || return 1
+
+    printf '%s\n' "$base/bash-completion/completions"
+}
 
 write_bash_completion() {
     out="$1"
@@ -2739,13 +2792,13 @@ _DNdistresS_help_topics() {
 
     printf '%s\n' \
         general usage topics topics-list what why info examples description \
-        runtime resolver resolver-strategy domains status environment exit-codes \
-        install uninstall show version help auto-tune batch binary burst \
-        force-burst column custom dig-options dig-options-mode \
+        runtime resolver resolver-strategy domains status environment \
+        exit-codes install uninstall show version help auto-tune batch binary \
+        burst force-burst column custom dig-options dig-options-mode \
         strict-dig-options directory duration file format local location maximum \
         force-maximum output port qps random remote seconds top type deny-any \
         allow-any url verbosity log-mode clock-tick-ms drain-timeout-ms \
-        with-systemd with-bash-completion without-systemd without-bash-completion \
+        with-systemd with-bash-completion \
         full
 }
 
@@ -3051,6 +3104,7 @@ EOF
 
 do_install() {
     target="$1"
+    completion_dir=""
 
     is_valid_target_dir "$target" || {
 
@@ -3080,9 +3134,25 @@ do_install() {
 
     if [ "$_WITH_BASH_COMPLETION" -eq 1 ]; then
 
-        mkdir -p "$COMPLETION_DIR"
+        completion_dir="$(resolve_completion_dir)" || {
 
-        dirs_msg="$dirs_msg${GREY}, ${LIGHT_GREY}$COMPLETION_DIR"
+            log 1 "failed to resolve bash completion directory"
+
+            exit_with_status "$EXIT_INSTALL"
+
+        }
+
+        is_valid_target_dir "$completion_dir" || {
+
+            log 1 "invalid bash completion path: ${LIGHT_GREY}$completion_dir"
+
+            exit_with_status "$EXIT_USAGE"
+
+        }
+
+        mkdir -p "$completion_dir"
+
+        dirs_msg="$dirs_msg${GREY}, ${LIGHT_GREY}$completion_dir"
         dir_count=$((dir_count + 1))
     fi
 
@@ -3164,8 +3234,6 @@ do_install() {
 
         log 3 "installed: ${LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.service"
 
-        log 4 "wrote service unit to ${LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.service"
-
         write_timer_unit "$SERVICE_DIR/${UNIT_BASE}.timer" || {
 
             log 1 "failed to write timer unit safely"
@@ -3175,8 +3243,6 @@ do_install() {
         }
 
         log 3 "installed: ${LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.timer"
-
-        log 4 "wrote timer unit to ${LIGHT_GREY}$SERVICE_DIR/${UNIT_BASE}.timer"
 
         systemctl_maybe daemon-reload
 
@@ -3196,7 +3262,7 @@ do_install() {
 
     if [ "$_WITH_BASH_COMPLETION" -eq 1 ]; then
 
-        write_bash_completion "$COMPLETION_DIR/$COMPLETION_BASENAME" || {
+        write_bash_completion "$completion_dir/$COMPLETION_BASENAME" || {
 
             log 1 "failed to write bash completion"
 
@@ -3204,9 +3270,7 @@ do_install() {
 
         }
 
-        log 3 "installed: ${LIGHT_GREY}$COMPLETION_DIR/$COMPLETION_BASENAME"
-
-        log 4 "wrote bash completion to ${LIGHT_GREY}$COMPLETION_DIR/$COMPLETION_BASENAME"
+        log 3 "installed: ${LIGHT_GREY}$completion_dir/$COMPLETION_BASENAME"
 
     else
 
@@ -3220,6 +3284,7 @@ do_install() {
 
 do_uninstall() {
     target="$1"
+    completion_dir=""
 
     is_valid_target_dir "$target" || {
 
@@ -3233,10 +3298,14 @@ do_uninstall() {
 
     [ ! -t 2 ] || [ "$_VERBOSITY" -lt 3 ] || print_banner >&2
 
+    completion_dir="$(resolve_completion_dir 2>/dev/null || true)"
+
+    [ -n "$completion_dir" ] || completion_dir="/nonexistent"
+
     service_unit="$SERVICE_DIR/${UNIT_BASE}.service"
     timer_unit="$SERVICE_DIR/${UNIT_BASE}.timer"
     binary_path="$target/$UNIT_BASE"
-    completion_path="$COMPLETION_DIR/$COMPLETION_BASENAME"
+    completion_path="$completion_dir/$COMPLETION_BASENAME"
 
     log 3 "running opportunistic uninstall"
 
@@ -4016,7 +4085,8 @@ query_one() {
     resolver_host="${4:-$RESOLVER}"
     resolver_port="${5:-$_PORT}"
 
-    log 5 "query: domain=${LIGHT_GREY}$d ${GREY}type=${LIGHT_GREY}$qtype ${GREY}resolver=${LIGHT_GREY}${resolver_host}#${resolver_port}"
+    [ "${_VERBOSITY:-0}" -lt 5 ] || \
+        log 5 "query: domain=${LIGHT_GREY}$d ${GREY}type=${LIGHT_GREY}$qtype ${GREY}resolver=${LIGHT_GREY}${resolver_host}#${resolver_port}"
 
     case "$_BINARY" in
         dig)
@@ -4371,7 +4441,7 @@ print_start_notice() {
     print_banner >&2
 
     printf '%b\n' \
-        "          ${UNDERLINE}${LIGHT_GREY}$NAME v${VERSION} $COPYRIGHT_YEAR $AUTHOR_NAME${NONE}" \
+        "          ${UNDERLINE}${LIGHT_GREY}$NAME v${VERSION} $COPYRIGHT $AUTHOR_NAME${NONE}" \
         "" \
         "   ${GREY}This program comes with ${BOLD}${RED}ABSOLUTELY NO WARRANTY${NONE}${GREY}; for details type '${LIGHT_GREY}show w${GREY}'." \
         "   ${GREY}This is ${BOLD}${LIGHT_GREY}free software${NONE}${GREY}, and you are welcome to ${BOLD}${LIGHT_GREY}redistribute it${NONE} ${GREY}under certain" \
@@ -5158,23 +5228,23 @@ show_help_topic() {
             help_topic_header "info"
 
             cat <<EOF
-Name:                  $NAME
+Name:         $NAME
 
-Version:               ${VERSION}${VERSION_PICO_STRING}
-Branch:                $BRANCH
+Version:      ${VERSION}${VERSION_PICO_STRING}
+Branch:       $BRANCH
 
-Release date:          $RELEASE_DATE
+Release date: $RELEASE_DATE
 
-License:               $LICENSE
+License:      $LICENSE
 
-Contact:               $CONTACT
-Copyright:             $COPYRIGHT_YEAR $AUTHOR_NAME
+Contact:      $CONTACT
+Copyright:    $COPYRIGHT $AUTHOR_NAME
 
-${_SCRIPT_BLOCK}Though I strive for accuracy, the following metrics are generated by a
-function in the script parsing the script itself, and may therefore be
-inaccurate or incomplete.
-
-It is also entirely possible that I just suck at doing things.
+${_SCRIPT_BLOCK}Note:
+  The following metrics are generated by the the creatively named
+  collect_script_metrics() function in the script itself, and may therefore
+  be inaccurate or incomplete.
+  You can trust them, but don't stake your life or career on them or anything.
 
 $_METRICS
 
@@ -5489,8 +5559,10 @@ EOF
             dispatch_burst_logical_disp="${DISPATCH_BURST_LOGICAL:-$_BURST}"
             log_mode_disp="${LOG_MODE:-auto}"
             log_tag_disp="${LOG_TAG:-${0##*/}}"
-            timer_period_disp="${_TIMER_PERIOD:-"(auto-detect)"}"
+            timer_period_disp="${_TIMER_PERIOD:-"$TIMER_SERVICE_PERIOD"}"
             tmpdir_disp="${TMPDIR:-/tmp}"
+            completion_dir_resolved="$(resolve_completion_dir 2>/dev/null || true)"
+            completion_dir_disp="${COMPLETION_DIR:-"$completion_dir_resolved"}"
 
             help_topic_header "environment"
 
@@ -5506,10 +5578,10 @@ User-facing switches / env vars:
   _AUTO_TUNE_PCTL_MAX_RATIO                $_AUTO_TUNE_PCTL_MAX_RATIO
   _AUTO_TUNE_MAX_GROWTH_FACTOR             $_AUTO_TUNE_MAX_GROWTH_FACTOR
 
-  _BINARY        -b, --binary              $_BINARY
-  _TYPE          -T, --type                $_TYPE
-  _RANDOM        -R, --random              $_RANDOM
-  RANDOM_RR_POOL                           $RANDOM_RR_POOL
+  _BINARY        -b, --binary $_BINARY
+  _TYPE          -T, --type   $_TYPE
+  _RANDOM        -R, --random $_RANDOM
+  RANDOM_RR_POOL              $RANDOM_RR_POOL
 
   _DENY_ANY             --deny-any / --allow-any       $_DENY_ANY
   _WITH_SYSTEMD         --with/without-systemd         $_WITH_SYSTEMD
@@ -5541,17 +5613,17 @@ User-facing switches / env vars:
   _LOCATION_FORCED                  $_LOCATION_FORCED
   _LOCATION_EXPLICIT                $_LOCATION_EXPLICIT
 
-  _LOCAL  -l, --local  $_LOCAL
-  _REMOTE -r, --remote $remote_disp
-  _PORT   -p, --port   $_PORT
-  _RESOLVER_STRATEGY  --resolver-strategy $_RESOLVER_STRATEGY
-  _FASTEST_PROBE_COUNT              $_FASTEST_PROBE_COUNT
-  _FASTEST_PROBE_DOMAIN             $_FASTEST_PROBE_DOMAIN
-  _LOCAL_POOL                       ${_LOCAL_POOL:-"(derived from -l/--local)"}
-  _REMOTE_POOL                      ${_REMOTE_POOL:-"(derived from -r/--remote)"}
-  DISPATCH_FANOUT                   $dispatch_fanout_disp
-  DISPATCH_TOKEN_COST               $dispatch_token_cost_disp
-  DISPATCH_BURST_LOGICAL            $dispatch_burst_logical_disp
+  _LOCAL                 -l, --local         $_LOCAL
+  _REMOTE                -r, --remote        $remote_disp
+  _PORT                  -p, --port          $_PORT
+  _RESOLVER_STRATEGY     --resolver-strategy $_RESOLVER_STRATEGY
+  _FASTEST_PROBE_COUNT                       $_FASTEST_PROBE_COUNT
+  _FASTEST_PROBE_DOMAIN                      $_FASTEST_PROBE_DOMAIN
+  _LOCAL_POOL                                ${_LOCAL_POOL:-"(derived from -l/--local)"}
+  _REMOTE_POOL                               ${_REMOTE_POOL:-"(derived from -r/--remote)"}
+  DISPATCH_FANOUT                            $dispatch_fanout_disp
+  DISPATCH_TOKEN_COST                        $dispatch_token_cost_disp
+  DISPATCH_BURST_LOGICAL                     $dispatch_burst_logical_disp
 
   _FILE        -f, --file      $file_disp
   _URL         -U, --url       $_URL
@@ -5601,7 +5673,7 @@ Service / install support:
   STATUS_BASENAME        $STATUS_BASENAME
   LOCK_BASENAME          $LOCK_BASENAME
   COMPLETION_BASENAME    $COMPLETION_BASENAME
-  COMPLETION_DIR         $COMPLETION_DIR
+  COMPLETION_DIR         $completion_dir_disp
 
 Runtime counters:
   BURST_TRIGGERED         ${BURST_TRIGGERED:-0}
@@ -5707,14 +5779,20 @@ EOF
 
             help_topic_header "install"
 
+            _install_completion_dir="$(resolve_completion_dir 2>/dev/null || true)"
+            _install_completion_disp="${COMPLETION_DIR:-"${_install_completion_dir:-"(auto, unresolved)"}"}"
+
             cat <<EOF
 Usage:
   ${0##*/} install [PATH] [--with-systemd] [--with-bash-completion]
   ${0##*/} -i [PATH] [--without-systemd] [--without-bash-completion]
   ${0##*/} --install [PATH] [--full]
 
-Default PATH:
-  $_INSTALL
+Install targets (PATH defaults to $_INSTALL):
+  script:              $_INSTALL/$UNIT_BASE
+  bash completion:     $_install_completion_disp/$COMPLETION_BASENAME
+  systemd service:     $SERVICE_DIR/${UNIT_BASE}.service
+  systemd timer:       $SERVICE_DIR/${UNIT_BASE}.timer
 
 Default behaviour:
   Installs script only.
@@ -5764,20 +5842,26 @@ EOF
 
             help_topic_header "uninstall"
 
+            _uninstall_completion_dir="$(resolve_completion_dir 2>/dev/null || true)"
+            _uninstall_completion_disp="${COMPLETION_DIR:-"${_uninstall_completion_dir:-"(auto, unresolved)"}"}"
+
             cat <<EOF
 Usage:
   ${0##*/} uninstall [PATH]
   ${0##*/} -u [PATH]
   ${0##*/} --uninstall [PATH]
 
-Default PATH:
-  $_UNINSTALL
+Uninstall targets (PATH defaults to $_UNINSTALL):
+  script:              $_UNINSTALL/$UNIT_BASE
+  bash completion:     $_uninstall_completion_disp/$COMPLETION_BASENAME
+  systemd service:     $SERVICE_DIR/${UNIT_BASE}.service
+  systemd timer:       $SERVICE_DIR/${UNIT_BASE}.timer
 
 Behaviour:
   Opportunistically checks for and removes, if present:
-  - script binary at PATH/${UNIT_BASE}
-  - bash completion at ${COMPLETION_DIR}/${COMPLETION_BASENAME}
-  - systemd service/timer units ${SERVICE_DIR}/${UNIT_BASE}.{service,timer}
+  - script
+  - bash completion
+  - systemd service/timer units
 
 Notes:
   Removal is existence-checked first.
@@ -7432,6 +7516,10 @@ log_effective_config() {
     timer_period_disp="${_TIMER_PERIOD:-"(auto-detect)"}"
     auto_samples_min_disp="${_AUTO_TUNE_SAMPLES_MIN:-"(unset)"}"
     auto_samples_max_disp="${_AUTO_TUNE_SAMPLES_MAX:-"(unset)"}"
+    completion_dir_resolved="$(resolve_completion_dir 2>/dev/null || true)"
+    completion_dir_disp="${COMPLETION_DIR:-"(auto)"}"
+
+    [ -n "$completion_dir_resolved" ] && completion_dir_disp="${completion_dir_disp} -> ${completion_dir_resolved}"
 
     log 5 "effective run config: ${LIGHT_GREY}MODE=$_MODE BINARY=$_BINARY TYPE=$_TYPE RANDOM=$_RANDOM OUTPUT=$_OUTPUT QPS=$_QPS BURST=$_BURST BURST_EFFECTIVE=$_BURST_EFFECTIVE FORCE_BURST=$_FORCE_BURST MAXIMUM=$_MAXIMUM FORCE_MAXIMUM=$_FORCE_MAXIMUM DURATION=$_DURATION VERBOSITY=$_VERBOSITY DENY_ANY=$_DENY_ANY LOCATION=$_LOCATION LOCATION_FORCED=$_LOCATION_FORCED LOCATION_EXPLICIT=$_LOCATION_EXPLICIT RESOLVER=$RESOLVER PORT=$_PORT"
 
@@ -7443,7 +7531,7 @@ log_effective_config() {
 
     log 5 "effective safety/tuning config: ${LIGHT_GREY}AUTO_TUNE=$_AUTO_TUNE SAMPLES=$_AUTO_TUNE_SAMPLES SAMPLES_MIN=$auto_samples_min_disp SAMPLES_MAX=$auto_samples_max_disp BURST_WINDOW_MS=$_AUTO_TUNE_BURST_WINDOW_MS TRIM_PCT=$_AUTO_TUNE_TRIM_PCT PERCENTILE=$_AUTO_TUNE_PERCENTILE PCTL_MAX_RATIO=$_AUTO_TUNE_PCTL_MAX_RATIO MAX_GROWTH_FACTOR=$_AUTO_TUNE_MAX_GROWTH_FACTOR CLOCK_TICK_MS=$_CLOCK_TICK_MS DRAIN_TIMEOUT_MS=$_DRAIN_TIMEOUT_MS MAX_DOWNLOAD_BYTES=$_MAX_DOWNLOAD_BYTES MAX_EXTRACT_BYTES=$_MAX_EXTRACT_BYTES MAX_DOMAINS_LINES=$_MAX_DOMAINS_LINES"
 
-    log 5 "effective status/system config: ${LIGHT_GREY}STATUS_ENABLED=$_STATUS_ENABLED STATUS_DIR=$_STATUS_DIR STATUS_FILE=$_STATUS_FILE LOCK_DIR=$_LOCK_DIR LOCK_FILE=$_LOCK_FILE TMPDIR=${TMPDIR:-/tmp} LOG_MODE=${LOG_MODE:-auto} LOG_TAG=${LOG_TAG:-${0##*/}} TIMER_PERIOD=$timer_period_disp SERVICE_DIR=$SERVICE_DIR UNIT_BASE=$UNIT_BASE COMPLETION_DIR=$COMPLETION_DIR"
+    log 5 "effective status/system config: ${LIGHT_GREY}STATUS_ENABLED=$_STATUS_ENABLED STATUS_DIR=$_STATUS_DIR STATUS_FILE=$_STATUS_FILE LOCK_DIR=$_LOCK_DIR LOCK_FILE=$_LOCK_FILE TMPDIR=${TMPDIR:-/tmp} LOG_MODE=${LOG_MODE:-auto} LOG_TAG=${LOG_TAG:-${0##*/}} TIMER_PERIOD=$timer_period_disp SERVICE_DIR=$SERVICE_DIR UNIT_BASE=$UNIT_BASE COMPLETION_DIR=$completion_dir_disp"
 
     log 5 "effective derived config: ${LIGHT_GREY}BURST_EFFECTIVE=$_BURST_EFFECTIVE DIG_BATCH_SIZE_EFFECTIVE=$_DIG_BATCH_SIZE_EFFECTIVE DIG_BATCH_LOGICAL_SIZE_EFFECTIVE=$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE DISPATCH_FANOUT=$DISPATCH_FANOUT DISPATCH_TOKEN_COST=$DISPATCH_TOKEN_COST DISPATCH_BURST_LOGICAL=$DISPATCH_BURST_LOGICAL LOCATION_FORCED=$_LOCATION_FORCED LOCATION_EXPLICIT=$_LOCATION_EXPLICIT"
 
