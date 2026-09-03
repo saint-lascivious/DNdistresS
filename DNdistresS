@@ -8,13 +8,13 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=0
 VERSION_MINOR=4
-VERSION_MICRO=0
-VERSION_PICO_STRING="-1.0-rc1"
+VERSION_MICRO=1
+VERSION_PICO_STRING="-1.0-rc2"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-09-02 NZST"
+RELEASE_DATE="2026-09-03 NZST"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT="(C) 2026"
@@ -265,6 +265,7 @@ DISPATCH_FANOUT="${DISPATCH_FANOUT:-1}"
 DISPATCH_TOKEN_COST="${DISPATCH_TOKEN_COST:-1}"
 DISPATCH_BURST_LOGICAL="${DISPATCH_BURST_LOGICAL:-$_BURST}"
 DIG_BATCH_LOGICAL_SIZE_EFFECTIVE="${DIG_BATCH_LOGICAL_SIZE_EFFECTIVE:-$_DIG_BATCH_SIZE_EFFECTIVE}"
+DISPATCH_SINGLE_ENDPOINT="${DISPATCH_SINGLE_ENDPOINT:-}"
 
 _FASTEST_PROBE_COUNT="${_FASTEST_PROBE_COUNT:-5}"
 _FASTEST_PROBE_DOMAIN="${_FASTEST_PROBE_DOMAIN:-random}"
@@ -1238,14 +1239,20 @@ select_fastest_resolver() {
 
 resolver_targets_for_dispatch() {
     _mode="$1"
-    _pool="$(pool_get "$_mode")"
-    _count="$(pool_count "$_pool")"
-
-    [ "$_count" -gt 0 ] || return 1
 
     if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "resolver-pick-fail" ]; then
         return 1
     fi
+
+    if [ -n "$DISPATCH_SINGLE_ENDPOINT" ]; then
+        printf '%s\n' "$DISPATCH_SINGLE_ENDPOINT"
+        return 0
+    fi
+
+    _pool="$(pool_get "$_mode")"
+    _count="$(pool_count "$_pool")"
+
+    [ "$_count" -gt 0 ] || return 1
 
     if [ "$_RESOLVER_STRATEGY" = "parallel" ]; then
         oldifs=$IFS
@@ -1322,6 +1329,23 @@ compute_dispatch_profile() {
     log 4 "dispatch profile: fanout=${LIGHT_GREY}$DISPATCH_FANOUT${GREY} token_cost=${LIGHT_GREY}$DISPATCH_TOKEN_COST${GREY} logical_burst=${LIGHT_GREY}$DISPATCH_BURST_LOGICAL${GREY} logical_batch=${LIGHT_GREY}$DIG_BATCH_LOGICAL_SIZE_EFFECTIVE"
 
     return 0
+}
+
+init_dispatch_single_endpoint() {
+    _mode="$1"
+    DISPATCH_SINGLE_ENDPOINT=""
+
+    [ "$_RESOLVER_STRATEGY" = "parallel" ] && return 0
+
+    _pool="$(pool_get "$_mode")"
+    _count="$(pool_count "$_pool")"
+
+    [ "$_count" -eq 1 ] || return 0
+
+    DISPATCH_SINGLE_ENDPOINT="$(pool_nth "$_pool" 1)"
+
+    log 4 "dispatch fast path: single resolver endpoint cached (${LIGHT_GREY}$DISPATCH_SINGLE_ENDPOINT${GREY})"
+
 }
 
 pick_resolver_endpoint() {
@@ -10000,6 +10024,8 @@ do_DNdistresS() {
 
     }
 
+    init_dispatch_single_endpoint "$ACTIVE_LOCATION"
+
     DIG_BATCHES_ENQUEUED=0
     DIG_BATCH_SEQ=0
     DIG_BATCH_DIR=""
@@ -10137,10 +10163,23 @@ do_DNdistresS() {
         while [ "$i" -lt "$send_budget" ]; do
 
             if [ -n "$DIG_BATCH_DIR" ]; then
-                targets="$(resolver_targets_for_dispatch "$ACTIVE_LOCATION" 2>/dev/null || true)"
+
+                if [ -n "$DISPATCH_SINGLE_ENDPOINT" ]; then
+
+                    if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "resolver-pick-fail" ]; then
+                        targets=""
+                    else
+                        targets="$DISPATCH_SINGLE_ENDPOINT"
+                    fi
+
+                else
+                    targets="$(resolver_targets_for_dispatch "$ACTIVE_LOCATION" 2>/dev/null || true)"
+                fi
 
                 if [ -z "$targets" ]; then
+
                     log 0 "failed to pick resolver endpoint(s)"
+
                     STOP_MAIN=1
                     STOP_REASON="resolver-pick-fail"
                     break
@@ -10311,7 +10350,19 @@ do_DNdistresS() {
                 QUERIES_START=$((START_TS + now_m - START_MONO))
             fi
 
-            targets="$(resolver_targets_for_dispatch "$ACTIVE_LOCATION" 2>/dev/null || true)"
+            if [ -n "$DISPATCH_SINGLE_ENDPOINT" ]; then
+
+                if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = \
+                    "resolver-pick-fail" ]; then
+                    targets=""
+                else
+                    targets="$DISPATCH_SINGLE_ENDPOINT"
+                fi
+
+            else
+                targets="$(resolver_targets_for_dispatch \
+                    "$ACTIVE_LOCATION" 2>/dev/null || true)"
+            fi
 
             if [ -z "$targets" ]; then
                 STOP_MAIN=1
