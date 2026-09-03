@@ -8,7 +8,7 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=0
 VERSION_MINOR=4
-VERSION_MICRO=2
+VERSION_MICRO=3
 VERSION_PICO_STRING="-1.0-rc2"
 
 SCRIPT_NAME="${0##*/}"
@@ -2672,7 +2672,7 @@ write_service_unit() {
 
     cat > "$out" <<EOF
 [Unit]
-Description=Run $NAME DNS query workload
+Description=$NAME harass your local Domain Name Server
 Documentation=man:systemd.service(5)
 Wants=network-online.target
 After=network-online.target
@@ -2729,7 +2729,7 @@ write_timer_unit() {
 
     cat > "$out" <<EOF
 [Unit]
-Description=Periodic $NAME run
+Description=$NAME harass your local Domain Name Server
 Documentation=man:systemd.timer(5)
 
 [Timer]
@@ -2809,7 +2809,9 @@ _DNdistresS_help_topics() {
                     }
 
                 }
+
             ' | awk '!seen[$0]++')"
+
         fi
 
         if [ -n "$topics" ]; then
@@ -2822,12 +2824,12 @@ _DNdistresS_help_topics() {
     printf '%s\n' \
         general usage topics topics-list what why info examples description \
         runtime resolver resolver-strategy domains status environment \
-        exit-codes install uninstall show version help auto-tune batch binary \
-        burst force-burst column custom dig-options dig-options-mode \
-        strict-dig-options directory duration file format local location maximum \
-        force-maximum output port qps random remote seconds top type deny-any \
-        allow-any url verbosity log-mode clock-tick-ms drain-timeout-ms \
-        with-systemd with-bash-completion \
+        exit-codes install uninstall show version help auto-tune batch \
+        binary burst force-burst column custom dig-options \
+        dig-options-mode strict-dig-options directory duration file format \
+        local location maximum force-maximum output port qps random remote \
+        seconds top type deny-any allow-any url verbosity log-mode \
+        clock-tick-ms drain-timeout-ms with-systemd with-bash-completion \
         full
 }
 
@@ -2857,10 +2859,11 @@ _DNdistresS_completion() {
         --without-systemd --with-bash-completion --without-bash-completion --purge"
 
     local run_opts="-b -B -c -C -d -D -f -F -l -L -m -o -p -q -r -R -s -t -T \
-        -U --allow-any --auto-tune --batch --binary --burst --column --custom --deny-any \
-        --dig-options --dig-options-mode --directory --duration --file --force-burst \
-        --force-maximum --format --local --location --maximum --output --port --qps \
-        --random --remote --resolver-strategy --seconds --top --type --url"
+        -U --allow-any --auto-tune --batch --binary --burst --column --custom \
+        --deny-any --dig-options --dig-options-mode --directory --duration \
+        --file --force-burst --force-maximum --format --local --location \
+        --maximum --output --port --qps --random --remote --resolver-strategy \
+        --seconds --top --type --url"
 
     for ((i = 1; i < COMP_CWORD; i++)); do
         tok="${COMP_WORDS[i]}"
@@ -3814,6 +3817,7 @@ extract_domains() {
                 if (lab !~ /^[a-z0-9-]+$/) return 0
 
                 if (lab ~ /^-/ || lab ~ /-$/) return 0
+
             }
 
             return 1
@@ -3892,6 +3896,7 @@ extract_custom_domains() {
         }
 
         function is_domain(x, n, i, lab) {
+
             if (x == "") return 0
 
             if (length(x) > 253) return 0
@@ -3910,6 +3915,7 @@ extract_custom_domains() {
                 if (lab !~ /^[a-z0-9-]+$/) return 0
 
                 if (lab ~ /^-/ || lab ~ /-$/) return 0
+
             }
 
             return 1
@@ -4196,13 +4202,15 @@ query_one() {
     resolver_port="${5:-$_PORT}"
 
     [ "${_VERBOSITY:-0}" -lt 5 ] || \
-        log 5 "query: domain=${LIGHT_GREY}$d ${GREY}type=${LIGHT_GREY}$qtype ${GREY}resolver=${LIGHT_GREY}${resolver_host}#${resolver_port}"
-
+        log 5 "query: domain=${LIGHT_GREY}$d ${GREY}" \
+            "type=${LIGHT_GREY}$qtype ${GREY}" \
+            "resolver=${LIGHT_GREY}${resolver_host}#${resolver_port}"
     case "$_BINARY" in
         dig)
 
             # shellcheck disable=SC2086
-            run_query_capture_answers "$out_file" dig @"$resolver_host" -p "$resolver_port" "$d" "$qtype" $DIG_OPTIONS_EFFECTIVE
+            run_query_capture_answers "$out_file" dig @"$resolver_host" -p \
+                "$resolver_port" "$d" "$qtype" $DIG_OPTIONS_EFFECTIVE
 
             ;;
         nslookup)
@@ -4323,6 +4331,7 @@ mono_ms() {
     fi
 
     now_ms
+
 }
 
 start_worker_pool() {
@@ -4355,6 +4364,7 @@ start_worker_pool() {
 
         : > "$shard"
         : > "$cshard"
+
         ANSWER_SHARDS="${ANSWER_SHARDS:+$ANSWER_SHARDS }$shard"
         COMPLETED_SHARDS="${COMPLETED_SHARDS:+$COMPLETED_SHARDS }$cshard"
         WORKER_FIFOS="${WORKER_FIFOS:+$WORKER_FIFOS }$fifo"
@@ -4500,6 +4510,7 @@ finalise_worker_metrics() {
     [ -s "$WORKER_EVENTS_FILE" ] || return 0
 
     peak="$(
+
         sort -k2,2n -k1,1 "$WORKER_EVENTS_FILE" 2>/dev/null | awk '
             BEGIN { cur=0; peak=0 }
             $1=="+" {
@@ -4517,6 +4528,7 @@ finalise_worker_metrics() {
             }
             END { print peak+0 }
         '
+
     )"
 
     case "$peak" in
@@ -4586,6 +4598,7 @@ set_show_topic() {
         log 1 "multiple show topics requested"
 
         exit_with_status "$EXIT_USAGE"
+
     fi
 
     SHOW_TOPIC="$_topic"
@@ -8098,12 +8111,15 @@ show_runtime_report() {
 
     rr_line "queries sent:" "$sent"
 
-    [ "${DISPATCH_FANOUT:-1}" -gt 1 ] && rr_line "logical queries admitted:" "${logical_sent:-0}"
+    [ "${DISPATCH_FANOUT:-1}" -gt 1 ] && \
+        rr_line "logical queries admitted:" "${logical_sent:-0}"
 
     [ "$COMPLETED" -gt 0 ] && \
+
         rr_line "queries completed:" "$COMPLETED"
 
     [ "$ANSWERED" -gt 0 ] && \
+
         rr_line "answers received:" "$ANSWERED"
 
     blocked_line
@@ -9867,8 +9883,8 @@ do_DNdistresS() {
 
             if (dbg_trace) {
                 printf "%s[%s…%s] %sdomain=%s%s %sposition=%s%d%s\n", \
-                    LIGHT_GREY, GREY, LIGHT_GREY, GREY, LIGHT_GREY, d, GREY, LIGHT_GREY, \
-                    out_count, NONE > "/dev/stderr"
+                    LIGHT_GREY, GREY, LIGHT_GREY, GREY, LIGHT_GREY, \
+                    d, GREY, LIGHT_GREY, out_count, NONE > "/dev/stderr"
             }
 
             print d
@@ -10183,7 +10199,9 @@ do_DNdistresS() {
                 batch_map="$DIG_BATCH_DIR/batch.$DIG_BATCH_SEQ.map"
 
                 : > "$batch_map" || {
+
                     log 0 "failed to create dig batch map: ${LIGHT_GREY}$batch_map"
+
                     STOP_MAIN=1
                     STOP_REASON="batch-create-fail"
                     break
@@ -10193,7 +10211,9 @@ do_DNdistresS() {
                 IFS='
 '
                 batch_target_count=0
+
                 for ep in $targets; do
+
                     [ -n "$ep" ] || continue
 
                     batch_host="${ep%\#*}"
@@ -10202,19 +10222,24 @@ do_DNdistresS() {
                     batch_file="$DIG_BATCH_DIR/batch.$DIG_BATCH_SEQ.$batch_target_count.txt"
 
                     : > "$batch_file" || {
+
                         log 0 "failed to create dig batch file: ${LIGHT_GREY}$batch_file"
+
                         STOP_MAIN=1
                         STOP_REASON="batch-create-fail"
                         break
                     }
 
                     printf '%s|%s|%s\n' "$batch_host" "$batch_port" "$batch_file" >> "$batch_map" || {
+
                         log 0 "failed to write dig batch map: ${LIGHT_GREY}$batch_map"
+
                         STOP_MAIN=1
                         STOP_REASON="batch-write-fail"
                         break
                     }
                 done
+
                 IFS=$oldifs
 
                 [ "$STOP_MAIN" -eq 1 ] && break
@@ -10282,7 +10307,9 @@ do_DNdistresS() {
                         [ -n "$batch_file" ] || continue
 
                         if ! enqueue_job "${DIG_BATCH_PREFIX}|$batch_count|$batch_file|$batch_host|$batch_port"; then
+
                             log 0 "worker queue write failed for dig batch: ${LIGHT_GREY}$batch_file"
+
                             STOP_MAIN=1
                             STOP_REASON="queue-fail"
                             break
