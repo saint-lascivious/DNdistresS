@@ -7,9 +7,9 @@ set -eu
 NAME="DNdistresS"
 
 VERSION_MAJOR=0
-VERSION_MINOR=4
-VERSION_MICRO=3
-VERSION_PICO_STRING="-1.0-rc2"
+VERSION_MINOR=5
+VERSION_MICRO=0
+VERSION_PICO_STRING="-1.0-rc3"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
@@ -446,8 +446,8 @@ log() {
     lvl="${1:-3}"
 
     case "${_VERBOSITY:-0}" in
-        0|1|2|3|4|5)
-            v="${_VERBOSITY}"
+        [0-5])
+            v="$_VERBOSITY"
             ;;
         *)
             v=0
@@ -455,22 +455,25 @@ log() {
     esac
 
     case "$lvl" in
-        0|critical|CRITICAL)
+        [0-5])
+            n=$lvl
+            ;;
+        critical|CRITICAL)
             n=0
             ;;
-        1|error|ERROR)
+        error|ERROR)
             n=1
             ;;
-        2|warning|WARNING|warn|WARN)
+        warning|WARNING)
             n=2
             ;;
-        3|info|INFO)
+        info|INFO)
             n=3
             ;;
-        4|debug|DEBUG)
+        debug|DEBUG)
             n=4
             ;;
-        5|trace|TRACE)
+        trace|TRACE)
             n=5
             ;;
         *)
@@ -484,43 +487,40 @@ log() {
 
     msg="${*:-}"
 
-    case "$lvl" in
-        0|critical|CRITICAL)
-            pfx="${LIGHT_GREY}[${BOLD}${RED}!${NONE}${LIGHT_GREY}]${NONE}"
+    case "$n" in
+        0)
+            glyph="${BOLD}${RED}!"
             pri="user.crit"
-            base="${RED}"
+            base="$RED"
             ;;
-        1|error|ERROR)
-            pfx="${LIGHT_GREY}[${RED}✗${LIGHT_GREY}]${NONE}"
+        1)
+            glyph="${RED}✗"
             pri="user.err"
-            base="${RED}"
+            base="$RED"
             ;;
-        2|warning|WARNING|warn|WARN)
-            pfx="${LIGHT_GREY}[${YELLOW}▲${LIGHT_GREY}]${NONE}"
+        2)
+            glyph="${YELLOW}▲"
             pri="user.warning"
-            base="${YELLOW}"
+            base="$YELLOW"
             ;;
-        3|info|INFO)
-            pfx="${LIGHT_GREY}[${ITALIC}${BLUE}i${NONE}${LIGHT_GREY}]${NONE}"
+        3)
+            glyph="${ITALIC}${BLUE}i"
             pri="user.info"
-            base="${BLUE}"
+            base="$BLUE"
             ;;
-        4|debug|DEBUG)
-            pfx="${LIGHT_GREY}[${GREY}•${LIGHT_GREY}]${NONE}"
+        4)
+            glyph="${GREY}•"
             pri="user.debug"
-            base="${GREY}"
+            base="$GREY"
             ;;
-        5|trace|TRACE)
-            pfx="${LIGHT_GREY}[${GREY}◦${LIGHT_GREY}]${NONE}"
+        5)
+            glyph="${GREY}◦"
             pri="user.debug"
-            base="${GREY}"
-            ;;
-        *)
-            pfx="${LIGHT_GREY}[${BLUE}?${LIGHT_GREY}]${NONE}"
-            pri="user.warning"
-            base="${YELLOW}"
+            base="$GREY"
             ;;
     esac
+
+    pfx="${LIGHT_GREY}[${glyph}${NONE}${LIGHT_GREY}]${NONE}"
 
     do_stderr=0
     do_logger=0
@@ -560,7 +560,8 @@ log() {
 
     if [ "$do_logger" -eq 1 ] && [ "$HAVE_LOGGER" -eq 1 ]; then
         _esc="$(printf '\033')"
-        clean_msg="$(printf '%s' "$render_msg" | sed "s/${_esc}\[[0-9;]*[[:alpha:]]//g")"
+        clean_msg="$(printf '%s' "$render_msg" | \
+            sed "s/${_esc}\[[0-9;]*[[:alpha:]]//g")"
 
         logger -t "$LOG_TAG" -p "$pri" -- "$clean_msg"
 
