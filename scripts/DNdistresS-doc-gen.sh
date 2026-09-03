@@ -46,6 +46,50 @@ if [ ! -x "$SCRIPT" ]; then
 
 fi
 
+need_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+DOCGEN_ENV_STRIP="
+    HOME
+    XDG_CACHE_HOME
+    XDG_DATA_HOME
+    TMPDIR
+    _DIRECTORY
+    _CUSTOM
+    _FILE
+    _LOCAL
+    _REMOTE
+    _URL
+    _PORT
+    _LOCATION
+    COMPLETION_DIR
+    _STATUS_ENABLED
+    _STATUS_DIR
+    _STATUS_FILE
+    _LOCK_DIR
+    _LOCK_FILE
+    _TIMER_PERIOD
+    LOG_MODE
+    LOG_TAG
+    _VERBOSITY
+"
+
+docgen_run_script() {
+    local -a strip_args=()
+    local v
+
+    for v in $DOCGEN_ENV_STRIP; do
+        strip_args+=(-u "$v")
+    done
+
+    env "${strip_args[@]}" \
+        HOME="/home/user" \
+        TMPDIR="/tmp" \
+        "$SCRIPT" "$@"
+
+}
+
 read_cli_var() {
     local key="$1"
 
@@ -69,7 +113,8 @@ read_generated_at() {
 }
 
 read_cli_runtime_version() {
-    "$SCRIPT" --version 2>/dev/null | awk '
+
+    docgen_run_script --version 2>/dev/null | awk '
         NF >= 2 {
             v = $2
             sub(/^v/, "", v)
@@ -77,6 +122,7 @@ read_cli_runtime_version() {
             exit
         }
     '
+
 }
 
 DOC_NAME="$(read_cli_var NAME)"
@@ -96,10 +142,6 @@ DOC_AUTHOR="$(read_cli_var AUTHOR_NAME)"
 
 SCRIPT_NAME="$(basename -- "$0")"
 GENERATED_AT="$(read_generated_at)"
-
-need_cmd() {
-    command -v "$1" >/dev/null 2>&1
-}
 
 make_tmpdir() {
     base="${1:-${TMPDIR:-/tmp}}"
@@ -152,14 +194,14 @@ run_help() {
 
     if [ "$topic" = "general" ]; then
 
-        if ! "$SCRIPT" --help 2>&1; then
+        if ! docgen_run_script --help 2>&1; then
             printf '%s\n' "error: failed to get help for topic '$topic'" >&2
             return 1
         fi
 
     else
 
-        if ! "$SCRIPT" --help "$topic" 2>&1; then
+        if ! docgen_run_script --help "$topic" 2>&1; then
             printf '%s\n' "error: failed to get help for topic '$topic'" >&2
             return 1
         fi
@@ -171,12 +213,12 @@ run_help() {
 discover_topics() {
     local output
 
-    if output="$("$SCRIPT" --help topics-list 2>/dev/null)"; then
+    if output="$(docgen_run_script --help topics-list 2>/dev/null)"; then
         printf '%s\n' "$output" | awk '/^[a-z][a-z0-9-]*$/ { print }' | awk '!seen[$0]++'
         return 0
     fi
 
-    if ! output="$("$SCRIPT" --help topics 2>&1)"; then
+    if ! output="$(docgen_run_script --help topics 2>&1)"; then
         printf '%s\n' "error: failed to discover topics from SCRIPT" >&2
         return 1
     fi
