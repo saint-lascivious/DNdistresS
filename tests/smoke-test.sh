@@ -1064,6 +1064,68 @@ test_select_fastest_resolver() {
 
 }
 
+test_pool_cache_invalidation() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        _REMOTE_POOL=""
+        _REMOTE_POOL_GEN=0
+        _RESOLVER_STRATEGY=rr
+        _REMOTE_RR_INDEX=1
+
+        append_pool_unique remote "1.1.1.1#53" || exit 1
+        append_pool_unique remote "8.8.8.8#53" || exit 1
+
+        c1="$(pool_count_cached remote)"
+
+        pf="${TMPDIR:-/tmp}/DNdistresS-rr-pick.$$"
+
+        pick_resolver_endpoint remote > "$pf" || exit 1
+        p1="$(cat "$pf")"
+
+        pick_resolver_endpoint remote > "$pf" || exit 1
+        p2="$(cat "$pf")"
+
+        append_pool_unique remote "9.9.9.9#53" || exit 1
+
+        c2="$(pool_count_cached remote)"
+
+        pick_resolver_endpoint remote > "$pf" || exit 1
+        p3="$(cat "$pf")"
+
+        rm -f "$pf"
+
+        printf "%s|%s|%s|%s|%s\n" "$c1" "$p1" "$p2" "$c2" "$p3"
+    ' 2>/dev/null || true)"
+
+    assert_eq "pool cache invalidates on generation bump and rr rotates correctly" \
+        "$out" "2|1.1.1.1#53|8.8.8.8#53|3|9.9.9.9#53"
+
+}
+
+test_pool_cache_stale_after_fastest_pin() {
+    # shellcheck disable=SC2016
+    out="$(run_in_lib eval '
+        _REMOTE_POOL="1.1.1.1#53
+8.8.8.8#53"
+        _REMOTE_POOL_GEN=0
+        _RESOLVER_STRATEGY=fastest
+
+        c1="$(pool_count_cached remote)"
+
+        _REMOTE_POOL="8.8.8.8#53"
+        _REMOTE_POOL_GEN=$((_REMOTE_POOL_GEN + 1))
+
+        c2="$(pool_count_cached remote)"
+        pick="$(pick_resolver_endpoint remote)"
+
+        printf "%s|%s|%s\n" "$c1" "$c2" "$pick"
+    ' 2>/dev/null || true)"
+
+    assert_eq "pool cache reflects post-fastest-pin pool after gen bump" \
+        "$out" "2|1|8.8.8.8#53"
+
+}
+
 test_parse_resolver_cli_and_pool_helpers() {
     # shellcheck disable=SC2016
     out="$(run_in_lib eval '
@@ -1580,6 +1642,10 @@ run_if_lib_func resolver_targets_for_dispatch test_resolver_targets_for_dispatch
 run_if_lib_func compute_dispatch_profile test_compute_dispatch_profile_parallel
 
 run_if_lib_func select_fastest_resolver test_select_fastest_resolver
+
+run_if_all_lib_funcs pool_count_cached pick_resolver_endpoint append_pool_unique -- test_pool_cache_invalidation
+
+run_if_all_lib_funcs pool_count_cached pick_resolver_endpoint -- test_pool_cache_stale_after_fastest_pin
 
 section_end
 
