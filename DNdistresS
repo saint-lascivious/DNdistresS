@@ -8,13 +8,13 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=0
 VERSION_MINOR=5
-VERSION_MICRO=2
-VERSION_PICO_STRING="-1.0-rc5"
+VERSION_MICRO=3
+VERSION_PICO_STRING="-1.0-rc6"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-09-03 NZST"
+RELEASE_DATE="2026-09-08 NZST"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT="(C) 2026"
@@ -338,15 +338,12 @@ SYNOPSIS='[-b _BINARY] [-B _BURST] [-c _COLUMN] [-C _CUSTOM] [-d _DIRECTORY]
     [-L _LOCATION] [-m _MAXIMUM[!]] [--force-maximum] [--force-burst]
     [-o _OUTPUT] [-p _PORT] [-q _QPS] [-r _REMOTE] [-s _SECONDS]
     [--resolver-strategy rr|random|fastest|parallel]
-    [-S {w|c|warranty|conditions}]
-    [-t (N|PATTERN)...] [-T _TYPE] [-R] [-u _UNINSTALL] [-U _URL] [-v]
-    [-V _VERBOSITY] [--deny-any] [--allow-any] [--auto-tune] [--full]
-    [--batch _DIG_BATCH_SIZE]
-    [--dig-options DIG_ARGS...]
-    [--dig-options-mode append|replace]
+    [-S {w|c|warranty|conditions}] [-t (N|PATTERN)...] [-T _TYPE] [-R]
+    [-u _UNINSTALL] [-U _URL] [-v] [-V _VERBOSITY] [--allow-any]
+    [--auto-tune] [--batch _DIG_BATCH_SIZE] [--deny-any]
+    [--dig-options DIG_ARGS...] [--dig-options-mode append|replace]
+    [--full] [--purge] [--with-bash-completion|--without-bash-completion]
     [--with-systemd|--without-systemd]
-    [--with-bash-completion|--without-bash-completion]
-    [--purge]
 '
 
 colourset() {
@@ -3003,7 +3000,7 @@ _DNdistresS_completion() {
         --deny-any --dig-options --dig-options-mode --directory --duration \
         --file --force-burst --force-maximum --format --local --location \
         --maximum --output --port --qps --random --remote --resolver-strategy \
-        --seconds --top --type --url"
+        --seconds --cache --top --type --url"
 
     for ((i = 1; i < COMP_CWORD; i++)); do
         tok="${COMP_WORDS[i]}"
@@ -3159,7 +3156,7 @@ _DNdistresS_completion() {
             COMPREPLY=( $(compgen -W "rr random fastest parallel" -- "$cur") )
             return 0
             ;;
-        -s|--seconds)
+        -s|--seconds|--cache)
             COMPREPLY=( $(compgen -W "0 300 3600 86400 604800" -- "$cur") )
             return 0
             ;;
@@ -4788,20 +4785,20 @@ is_cli_option_token() {
     esac
 
     case "$base" in
-        -h|h|--help|help|-v|v|--version|version|-S|S|--show|show|--show-warranty|--show-conditions|\
-        -b|b|--binary|binary|-B|B|--burst|burst|--force-burst|\
-        -c|c|--column|column|-C|C|--custom|custom|-d|d|--directory|directory|\
-        -D|D|--duration|duration|-f|f|--file|file|-F|F|--format|format|\
-        --full|full|-i|i|--install|install|-l|l|--local|local|-L|L|--location|location|\
-        -m|m|--maximum|maximum|--force-maximum|--deny-any|--allow-any|\
-        --batch|batch|\
-        -o|o|--output|output|-p|p|--port|port|-q|q|--qps|qps|\
-        -R|R|--random|random|--auto-tune|auto-tune|-r|r|--remote|remote|\
-        -s|s|--seconds|seconds|-t|t|--top|top|-T|T|--type|type|\
-        -u|u|--uninstall|uninstall|--with-systemd|--without-systemd|\
-        --with-bash-completion|--without-bash-completion|-U|U|--url|url|\
-        -V|V|--verbosity|verbosity|--dig-options|dig-options|--dig-options-mode|\
-        dig-options-mode|--resolver-strategy|resolver-strategy|--purge|purge)
+        -h|h|--help|help|-v|v|--version|version|-S|S|--show|show|\
+        --show-warranty| --show-conditions|-b|b|--binary|binary|-B|B|--burst|\
+        burst|--force-burst| -c|c|--column|column|-C|C|--custom|custom|-d|d|\
+        --directory|directory|-D|D|--duration|duration|-f|f|--file|file|-F|F|\
+        --format|format| --full|full|-i|i|--install|install|-l|l|--local|\
+        local|-L|L|--location|location|-m|m|--maximum|maximum|\
+        --force-maximum|--deny-any|--allow-any|--batch|batch|-o|o|--output|\
+        output|-p|p|--port|port|-q|q|--qps|qps|-R|R|--random|random|\
+        --auto-tune|auto-tune|-r|r|--remote|remote|-s|s|--seconds|seconds|\
+        --cache|cache|-t|t|--top|top|-T|T|--type|type|-u|u|--uninstall|\
+        uninstall|--with-systemd|--without-systemd|--with-bash-completion|\
+        --without-bash-completion|-U|U|--url|url|-V|V|--verbosity|verbosity|\
+        --dig-options|dig-options|--dig-options-mode|dig-options-mode|\
+        --resolver-strategy|resolver-strategy|--purge|purge)
             return 0
             ;;
         *)
@@ -6958,6 +6955,9 @@ EOF
 Meaning:
   Cache TTL for downloaded source.
 
+Aliases:
+  --cache, cache
+
 Default:
   $_SECONDS
 
@@ -7320,7 +7320,7 @@ canonical_help_topic() {
         remote|-r|r|--remote)
             printf '%s\n' "remote"
             ;;
-        seconds|-s|s|--seconds)
+        seconds|-s|s|--seconds|cache|--cache)
             printf '%s\n' "seconds"
             ;;
         top|-t|t|--top)
@@ -9307,13 +9307,18 @@ do_DNdistresS() {
                 _RESOLVER_STRATEGY="${1#*=}"
                 shift
                 ;;
-            -s|s|--seconds|seconds)
+            -s|s|--seconds|seconds|--cache|cache)
                 SEEN_NONEXCLUSIVE=1
 
                 need_optarg "$1" "$@"
 
                 _SECONDS="$2"
                 shift 2
+                ;;
+            --seconds=*|seconds=*|--cache=*|cache=*)
+                SEEN_NONEXCLUSIVE=1
+                _SECONDS="${1#*=}"
+                shift
                 ;;
             -t|t|--top|top)
                 SEEN_NONEXCLUSIVE=1
