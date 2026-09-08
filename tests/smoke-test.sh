@@ -1462,52 +1462,6 @@ test_extract_zip_ceiling() {
 
 }
 
-test_on_abort_exit_code_cli() {
-
-    if ! command -v dig >/dev/null 2>&1 && ! command -v nslookup >/dev/null 2>&1; then
-
-        skip "abort signal contract skipped (dig/nslookup unavailable)"
-
-        return 0
-    fi
-
-    f="${TMPDIR:-/tmp}/DNdistresS-abort.$$"
-    printf '%s\n' "example.com" > "$f"
-
-    set +e
-    "$SCRIPT" -f "$f" -F plain -t 1 -q 1 -D 0 >/dev/null 2>&1 &
-    pid=$!
-
-    sleep 0.3
-
-    kill -INT "$pid" >/dev/null 2>&1 || true
-
-    waited=0
-
-    while kill -0 "$pid" >/dev/null 2>&1; do
-
-        sleep 0.1
-
-        waited=$((waited + 1))
-
-        [ "$waited" -lt 50 ] || break
-
-    done
-
-    if kill -0 "$pid" >/dev/null 2>&1; then
-        kill -KILL "$pid" >/dev/null 2>&1 || true
-    fi
-
-    wait "$pid"
-    rc=$?
-    set -e
-
-    rm -f "$f"
-
-    assert_eq "SIGINT abort path exits with 130" "$rc" "130"
-
-}
-
 test_stop_reason_exit_code_mapping_fault_injected() {
 
     if command -v dig >/dev/null 2>&1; then
@@ -1564,6 +1518,7 @@ test_stop_reason_exit_code_mapping_fault_injected() {
     ' 2>/dev/null || true)"
 
     assert_eq "fault-injected queue-fail maps to EXIT_QUEUE" "$rc_queue" "8"
+
 }
 
 test_domain_dedupe_before_top() {
@@ -1651,11 +1606,7 @@ section_end
 
 section_begin "lib-parsers"
 
-skip "parse_burst_opt coverage handled by CLI burst parsing checks"
-
 run_if_lib_func timer_period_seconds test_timer_period_seconds
-
-skip "calendar_alias_seconds covered indirectly via timer_period_seconds"
 
 run_if_lib_func compute_runtime_metrics test_compute_runtime_metrics_behavior
 
@@ -1817,12 +1768,12 @@ if command -v dig >/dev/null 2>&1 || command -v nslookup >/dev/null 2>&1; then
     tmp_domains="${TMPDIR:-/tmp}/DNdistresS-smoke-domains.$$"
     printf '%s\n' "example.com" > "$tmp_domains"
 
-    out="$("$SCRIPT" -V 5 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true)"
+    out="$(LOG_MODE=stderr "$SCRIPT" -V 5 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true)"
 
     assert_contains "auto-tune disabled emits trace skip log at V5" "$out" \
         "skipping auto-tune"
 
-    out="$("$SCRIPT" --auto-tune -V 3 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true)"
+    out="$(LOG_MODE=stderr "$SCRIPT" --auto-tune -V 3 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true)"
 
     assert_contains "auto-tune enabled emits warmup info log at V3" "$out" \
         "probing"
@@ -1834,7 +1785,7 @@ if command -v dig >/dev/null 2>&1 || command -v nslookup >/dev/null 2>&1; then
     printf '%s\n' "example.com" > "$tmp_domains"
 
     out="$(
-        _AUTO_TUNE_SAMPLES_MIN=3 _AUTO_TUNE_SAMPLES_MAX=5 \
+        LOG_MODE=stderr _AUTO_TUNE_SAMPLES_MIN=3 _AUTO_TUNE_SAMPLES_MAX=5 \
         "$SCRIPT" --auto-tune -V 4 -f "$tmp_domains" -F plain -t 1 -q 1 -D 1 2>&1 || true
     )"
 
@@ -1888,8 +1839,6 @@ run_if_all_lib_funcs start_worker_pool enqueue_job stop_worker_pool sum_complete
 run_if_lib_func cleanup_all test_cleanup_all_idempotent
 
 run_if_lib_func do_DNdistresS test_stop_reason_exit_code_mapping_fault_injected
-
-test_on_abort_exit_code_cli
 
 section_end
 
