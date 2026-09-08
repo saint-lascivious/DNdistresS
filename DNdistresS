@@ -8,8 +8,8 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=0
 VERSION_MINOR=5
-VERSION_MICRO=1
-VERSION_PICO_STRING="-1.0-rc4"
+VERSION_MICRO=2
+VERSION_PICO_STRING="-1.0-rc5"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
@@ -171,14 +171,35 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
+kill_pid_tree() {
+    _root="$1"
+    _sig="${2:-TERM}"
+
+    if need_cmd pgrep; then
+
+        for _child in $(pgrep -P "$_root" 2>/dev/null); do
+
+            kill_pid_tree "$_child" "$_sig"
+
+        done
+
+    fi
+
+    kill "-$_sig" "$_root" 2>/dev/null || true
+}
+
 DNDISTRESS_TEST_FAULT_STOP_REASON="${DNDISTRESS_TEST_FAULT_STOP_REASON:-}"
 DNDISTRESS_TEST_FAULT_USED="${DNDISTRESS_TEST_FAULT_USED:-0}"
 
 test_fault_should_fire() {
 
+    _fault_reason="${1:-}"
+
     [ "${DNDISTRESS_TEST_MODE:-0}" = "1" ] || return 1
 
     [ -n "${DNDISTRESS_TEST_FAULT_STOP_REASON:-}" ] || return 1
+
+    [ "${DNDISTRESS_TEST_FAULT_STOP_REASON}" = "$_fault_reason" ] || return 1
 
     [ "${DNDISTRESS_TEST_FAULT_USED:-0}" -eq 0 ] || return 1
 
@@ -1360,7 +1381,7 @@ select_fastest_resolver() {
 resolver_targets_for_dispatch() {
     _mode="$1"
 
-    if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "resolver-pick-fail" ]; then
+    if test_fault_should_fire "resolver-pick-fail"; then
         return 1
     fi
 
@@ -4419,7 +4440,7 @@ enqueue_job() {
 
     [ "$WORKER_COUNT" -gt 0 ] || return 1
 
-    if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "queue-fail" ]; then
+    if test_fault_should_fire "queue-fail"; then
         return 1
     fi
 
@@ -7915,13 +7936,17 @@ stop_worker_pool() {
                     DRAIN_FORCED=1
 
                     for p in $WORKER_PIDS; do
-                        kill -TERM "$p" 2>/dev/null || true
+
+                        kill_pid_tree "$p" TERM
+
                     done
 
                     sleep_ms 100
 
                     for p in $WORKER_PIDS; do
-                        kill -KILL "$p" 2>/dev/null || true
+
+                        kill_pid_tree "$p" KILL
+
                     done
 
                     break
@@ -7938,7 +7963,9 @@ stop_worker_pool() {
     if [ "$mode" = "force" ]; then
 
         for p in $WORKER_PIDS; do
-            kill -TERM "$p" 2>/dev/null || true
+
+            kill_pid_tree "$p" TERM
+
         done
 
         if [ "$force_grace_ms" -gt 0 ] && [ -n "$WORKER_PIDS" ]; then
@@ -7970,7 +7997,7 @@ stop_worker_pool() {
         fi
 
         for p in $WORKER_PIDS; do
-            kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true
+            kill -0 "$p" 2>/dev/null && kill_pid_tree "$p" KILL || true
         done
 
     fi
@@ -10315,7 +10342,7 @@ do_DNdistresS() {
 
                 if [ -n "$DISPATCH_SINGLE_ENDPOINT" ]; then
 
-                    if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = "resolver-pick-fail" ]; then
+                    if test_fault_should_fire "resolver-pick-fail"; then
                         targets=""
                     else
                         targets="$DISPATCH_SINGLE_ENDPOINT"
@@ -10512,8 +10539,7 @@ do_DNdistresS() {
 
             if [ -n "$DISPATCH_SINGLE_ENDPOINT" ]; then
 
-                if test_fault_should_fire && [ "$DNDISTRESS_TEST_FAULT_STOP_REASON" = \
-                    "resolver-pick-fail" ]; then
+                if test_fault_should_fire "resolver-pick-fail"; then
                     targets=""
                 else
                     targets="$DISPATCH_SINGLE_ENDPOINT"
