@@ -12,13 +12,13 @@ ROOT_DIR="$(
 SCRIPT="$ROOT_DIR/DNdistresS"
 OUT="$ROOT_DIR/README.md"
 
-TOPICS_ORDER="usage topics what why install uninstall purge examples show \
-    version info description  runtime status environment exit-codes resolver \
-    domains binary qps burst  force-burst batch maximum force-maximum \
-    auto-tune clock-tick-ms drain-timeout-ms duration output type random \
-    deny-any allow-any dig-options dig-options-mode strict-dig-options \
-    location local remote port file url format column top custom directory \
-    seconds with-systemd with-bash-completion full verbosity log-mode"
+TOPICS_ORDER="usage topics what why install uninstall allow-any auto-tune \
+    batch binary burst clock-tick-ms column custom deny-any description \
+    dig-options dig-options-mode directory domains drain-timeout-ms \
+    duration environment examples exit-codes file force-burst force-maximum\
+    format full full local location log-mode maximum output port purge qps \
+    random remote resolver runtime seconds show status strict-dig-options \
+    top type url verbosity version with-bash-completion with-systemd"
 
 README_EXCLUDE_TOPICS="topics-list general help"
 
