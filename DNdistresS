@@ -7,9 +7,9 @@ set -eu
 NAME="DNdistresS"
 
 VERSION_MAJOR=0
-VERSION_MINOR=5
-VERSION_MICRO=3
-VERSION_PICO_STRING="-1.0-rc6"
+VERSION_MINOR=6
+VERSION_MICRO=0
+VERSION_PICO_STRING="-1.0-rc8"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
@@ -562,13 +562,7 @@ log() {
             do_logger=1
             ;;
         auto|'')
-
-            if [ -t 2 ]; then
-                do_stderr=1
-            else
-                do_logger=1
-            fi
-
+            do_stderr=1
             ;;
         *)
 
@@ -5417,7 +5411,7 @@ help_topic_what_body() {
     cat <<EOF
 DNdistresS is a controlled DNS workload generator.
 
-It repeatedly queries domains with configurable rate, burst, concurrency
+It repeatedly queries domains with configurable rate, burst, concurrency,
 runtime, resolver target, query type, source lists, and caching behaviour.
 
 It makes DNS traffic on purpose, in ways you can shape.
@@ -5893,8 +5887,8 @@ User-facing switches / env vars:
   _RESOLVER_STRATEGY     --resolver-strategy $_RESOLVER_STRATEGY
   _FASTEST_PROBE_COUNT                       $_FASTEST_PROBE_COUNT
   _FASTEST_PROBE_DOMAIN                      $_FASTEST_PROBE_DOMAIN
-  _LOCAL_POOL                                ${_LOCAL_POOL:-"(derived from -l/--local)"}
-  _REMOTE_POOL                               ${_REMOTE_POOL:-"(derived from -r/--remote)"}
+  _LOCAL_POOL                                ${_LOCAL_POOL:-"(-l/--local)"}
+  _REMOTE_POOL                               ${_REMOTE_POOL:-"(-r/--remote)"}
   DISPATCH_FANOUT                            $dispatch_fanout_disp
   DISPATCH_TOKEN_COST                        $dispatch_token_cost_disp
   DISPATCH_BURST_LOGICAL                     $dispatch_burst_logical_disp
@@ -6027,7 +6021,7 @@ Related variables:
   _LOCK_FILE        Lock file path
                     (default: \$_LOCK_DIR/DNdistresS-status.lock)
   _STRICT_DIG_OPTIONS
-                    Strict mode for --dig-options mismatch handling (default: 0)
+                    Strict mode for --dig-options mismatch (default: 0)
 
 Note:
   You can override these variables via the environment to customise status file
@@ -6329,7 +6323,7 @@ Mechanism:
      - compute median (p50) and target percentile (_AUTO_TUNE_PERCENTILE)
      - cap percentile to: pctl_ms <= p50_ms * _AUTO_TUNE_PCTL_MAX_RATIO
   3) Derive:
-     batch_effective = (_DIG_BATCH_SIZE_EFFECTIVE when dig batching is active, else 1)
+     batch_effective = (_DIG_BATCH_SIZE_EFFECTIVE with dig -B/--batch, else 1)
      _MAXIMUM ~= ceil((_QPS / batch_effective) * (pctl_ms/1000) * 1.2)
      _BURST   ~= ceil(_QPS * (_AUTO_TUNE_BURST_WINDOW_MS/1000))
      if batch_effective > 1:
@@ -6800,6 +6794,9 @@ Default:
   $_OUTPUT
 
 quiet suppresses answer output; answer prints response records.
+
+See also:
+  --help log-mode
 EOF
 
             ;;
@@ -6816,6 +6813,13 @@ Default:
 
 Range:
   1..65535.
+
+See also:
+  --help resolver
+  --help resolver-strategy
+  --help location
+  --help local
+  --help remote
 EOF
 
             ;;
@@ -6888,8 +6892,10 @@ Validation:
   Non-negative integer.
 
 Behaviour:
-  - On duration stop: graceful drain waits up to this timeout, then force-stops workers.
-  - On EOF/normal source exhaustion: default graceful stop path remains unchanged.
+  - On duration stop: graceful drain waits up to this timeout, then
+    force-stops workers.
+  - On EOF/normal source exhaustion: default graceful stop path remains
+    unchanged.
   - On abort signal: force cleanup path is used immediately.
 
 Guidance:
@@ -7148,7 +7154,7 @@ Variable:
   LOG_MODE
 
 Values:
-  auto   -> stderr when interactive (-t 2), logger otherwise
+  auto   -> always stderr (never opportunistically uses logger)
   stderr -> always stderr
   logger -> always logger (falls back to stderr if logger missing)
   both   -> mirror to stderr and logger
@@ -7156,8 +7162,14 @@ Values:
 Default:
   $LOG_MODE
 
+Note:
+  logger is never used unless explicitly requested via LOG_MODE=logger
+  or LOG_MODE=both. This avoids silently filling syslog/journal during
+  non-interactive or piped/redirected usage. Ask me how I know.
+
 See also:
   --help verbosity
+  --help output
 EOF
 
             ;;
@@ -8371,6 +8383,8 @@ on_exit_trap() {
 
         END_MS="$(now_ms)"
 
+        log 5 "START_TS=${LIGHT_GREY}$START_TS${BLUE} QUERIES_START=${LIGHT_GREY}$QUERIES_START${BLUE} LAST_SENT_MS=${LIGHT_GREY}$LAST_SENT_MS${BLUE} END_MS=${LIGHT_GREY}$END_MS${BLUE}"
+
         if [ "${_VERBOSITY:-0}" -gt 0 ]; then
 
             show_runtime_report >&2 || true
@@ -8415,6 +8429,8 @@ on_abort() {
     finalise_worker_metrics || true
 
     END_MS="$(now_ms)"
+
+    log 5 "START_TS=${LIGHT_GREY}$START_TS${BLUE} QUERIES_START=${LIGHT_GREY}$QUERIES_START${BLUE} LAST_SENT_MS=${LIGHT_GREY}$LAST_SENT_MS${BLUE} END_MS=${LIGHT_GREY}$END_MS${BLUE}"
 
     if [ "${_VERBOSITY:-0}" -gt 0 ]; then
 
@@ -10635,6 +10651,8 @@ do_DNdistresS() {
     finalise_worker_metrics
 
     END_MS="$(now_ms)"
+
+    log 5 "START_TS=${LIGHT_GREY}$START_TS${BLUE} QUERIES_START=${LIGHT_GREY}$QUERIES_START${BLUE} LAST_SENT_MS=${LIGHT_GREY}$LAST_SENT_MS${BLUE} END_MS=${LIGHT_GREY}$END_MS${BLUE}"
 
     if [ "$_VERBOSITY" -gt 0 ]; then
 
