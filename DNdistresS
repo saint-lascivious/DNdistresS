@@ -8,8 +8,8 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=0
 VERSION_MINOR=6
-VERSION_MICRO=0
-VERSION_PICO_STRING="-1.0-rc8"
+VERSION_MICRO=1
+VERSION_PICO_STRING="-1.0-rc8=D"
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
@@ -5974,6 +5974,7 @@ Current exit codes:
   10   EXIT_INSTALL      install/uninstall unit/script operation failure
   11   EXIT_TOOLING      external tool invocation/cp/chmod/install failure
   12   EXIT_INTERNAL     internal invariant/state error
+  13   EXIT_PENIS        penis
   130  EXIT_ABORT        interrupted/aborted (SIGINT-style)
 
 Notes:
@@ -8984,6 +8985,10 @@ do_DNdistresS() {
                 set_mode "version"
 
                 shift
+                ;;
+            -P|P|--penis|penis)
+                printf '%s\n' "penis"
+                exit 13
                 ;;
             -S|S|--show|show)
 
