@@ -15,10 +15,10 @@ OUT="$ROOT_DIR/README.md"
 TOPICS_ORDER="usage topics what why install uninstall allow-any auto-tune \
     batch binary burst clock-tick-ms column custom deny-any description \
     dig-options dig-options-mode directory domains drain-timeout-ms \
-    duration environment examples exit-codes file force-burst force-maximum\
-    format full full local location log-mode maximum output port purge qps \
-    random remote resolver runtime seconds show status strict-dig-options \
-    top type url verbosity version with-bash-completion with-systemd"
+    duration environment examples exit-codes file force-burst force-maximum \
+    format full local location log-mode maximum output port purge qps random \
+    remote resolver runtime seconds show status strict-dig-options top type \
+    url verbosity version with-bash-completion with-systemd"
 
 README_EXCLUDE_TOPICS="topics-list general help"
 
@@ -314,7 +314,7 @@ emit_index_group() {
         [ "$(topic_group "$t")" = "$group" ] || continue
 
         if [ "$printed" -eq 0 ]; then
-            printf '### %s\n' "$group"
+            printf '### %s\n\n' "$group"
             printed=1
         fi
 
@@ -448,34 +448,31 @@ done
 SMOKE_OUTPUT="$(capture_smoke_output)"
 
 emit_development_index() {
-    printf '%s\n' "### Development"
+    printf '%s\n\n' "### Development"
     printf '%s\n' "- [contributing](#contributing)"
     printf '%s\n' "- [security](#security)"
     printf '%s\n' "- [smoke-test-suite](#smoke-test-suite)"
     printf '%s\n' "- [bug-reports](#bug-reports)"
     printf '%s\n' "- [feature-requests](#feature-requests)"
     printf '%s\n' "- [pull-requests](#pull-requests)"
-    printf '\n'
 }
 
 emit_development_section() {
 
     cat <<'EOF'
 
-## Development
-
-### Contributing
+## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute
 to this project.
 
-### Security
+## Security
 
 For security-related issues, see [SECURITY.md](SECURITY.md).
 
 Please do **not** open a public issue for security vulnerabilities.
 
-### Smoke Test Suite
+## Smoke Test Suite
 
 Smoke tests are run via:
 
@@ -483,24 +480,27 @@ Smoke tests are run via:
 
 The script returns non-zero on failure.
 
-#### Run tests
+### Run tests
 
-##### Linux / macOS / Windows (PowerShell + Git Bash)
+#### Linux / macOS / Windows (PowerShell + Git Bash)
+
 ```bash
 bash ./tests/smoke-test.sh
 ```
 
-##### Strict mode
+#### Strict mode
+
 ```bash
 bash ./tests/smoke-test.sh --strict
 ```
 
-##### Windows (WSL)
+#### Windows (WSL)
+
 ```powershell
 wsl bash ./tests/smoke-test.sh
 ```
 
-#### Example run
+### Example run
 
 EOF
 
@@ -510,7 +510,7 @@ EOF
 
     cat <<'EOF'
 
-#### Quiet mode
+### Quiet mode
 
 ```bash
 bash ./tests/smoke-test.sh --quiet
@@ -518,7 +518,7 @@ bash ./tests/smoke-test.sh --quiet
 
 Aliases: `q`, `-q`, `quiet`, `--quiet`.
 
-### Bug Reports
+## Bug Reports
 
 Open an issue on [GitHub Issues](../../issues) with:
 
@@ -527,13 +527,13 @@ Open an issue on [GitHub Issues](../../issues) with:
 - Expected vs actual behaviour
 - Script version (`DNdistresS --version`)
 
-### Feature Requests
+## Feature Requests
 
 Feature requests are welcome via [GitHub Issues](../../issues).
 
 Please describe the use case, not just the desired behaviour.
 
-### Pull Requests
+## Pull Requests
 
 Pull requests should:
 
@@ -556,23 +556,12 @@ EOF
 EOF
 
     cat <<'EOF'
-<table align="center"><tr><td>
-<pre>
- _____   _____       _ _                             _____
-|  __ \ |  __ \     | (_)       _                   / ____)
-| |  \ \| |  \ \  __| |_  ___ _| |_  ____ _____  __( (____
-| |   | | |   | |/ _  | |/___)_   _)/ ___) ___ |/___)____ \
-| |__/ /| |   | | |_| | |___ | | |_| |   | ____|___ |____) )
-|_____/ |_|   |_|\____|_(___/   \__)_|   |_____(___(______/
-</pre>
-</td></tr></table>
+# DNdistresS
 
 EOF
 
     cat <<'EOF'
-<p align="center">
-  Harass your local Domain Name Server.
-</p>
+Harass your local Domain Name Server.
 
 EOF
 
