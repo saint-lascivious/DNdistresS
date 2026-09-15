@@ -1820,7 +1820,7 @@ assert_ok_cmd "burst option -B 100! parses with force override" \
 force_burst_help_out="$("$SCRIPT" --help force-burst 2>&1 || true)"
 
 assert_contains "force-burst help describes clamp override" \
-    "$force_burst_help_out" "Overrides the burst safety clamp"
+    "$force_burst_help_out" "Override the burst safety clamp"
 
 version_out="$("$SCRIPT" --version 2>&1 || true)"
 
