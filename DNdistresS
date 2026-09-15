@@ -6,15 +6,15 @@ set -eu
 
 NAME="DNdistresS"
 
-VERSION_MAJOR=0
-VERSION_MINOR=6
-VERSION_MICRO=1
-VERSION_PICO_STRING="-1.0-rc8=D"
+VERSION_MAJOR=1
+VERSION_MINOR=0
+VERSION_MICRO=0
+VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-09-09 NZST"
+RELEASE_DATE="2026-09-15 NZST"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT="(C) 2026"
@@ -33,6 +33,7 @@ EXIT_TIMEOUT=9
 EXIT_INSTALL=10
 EXIT_TOOLING=11
 EXIT_INTERNAL=12
+EXIT_PENIS=13
 EXIT_ABORT=130
 
 epoch_s_posix() {
@@ -661,17 +662,17 @@ json_escape() {
 }
 
 exit_with_status() {
-    code="${1:-0}"
+    DNdistresS_exit_code="${1:-0}"
 
-    [ "$_STATUS_ENABLED" = "1" ] || exit "$code"
+    [ "$_STATUS_ENABLED" = "1" ] || exit "$DNdistresS_exit_code"
 
-    is_running_under_own_service || exit "$code"
+    is_running_under_own_service || exit "$DNdistresS_exit_code"
 
     if ! mkdir -p "$_STATUS_DIR" 2>/dev/null; then
 
         log 1 "failed to create status dir: ${LIGHT_GREY}$_STATUS_DIR"
 
-        exit "$code"
+        exit "$DNdistresS_exit_code"
     fi
 
     status_locked=0
@@ -682,7 +683,7 @@ exit_with_status() {
 
             log 1 "failed to create lock dir: ${LIGHT_GREY}$_LOCK_DIR"
 
-            exit "$code"
+            exit "$DNdistresS_exit_code"
         fi
 
         exec 9>"$_LOCK_FILE"
@@ -709,7 +710,7 @@ exit_with_status() {
     cat > "$tmp_status" <<EOF
 {
   "status": {
-    "exit_code": $code,
+    "exit_code": $DNdistresS_exit_code,
     "timestamp": $(json_escape "$now")
   },
   "metrics": {
@@ -817,7 +818,7 @@ EOF
         exec 9>&-
     fi
 
-    exit "$code"
+    exit "$DNdistresS_exit_code"
 }
 
 require_bool01() {
@@ -4695,6 +4696,7 @@ SEEN_L=0
 SEEN_R=0
 SEEN_C=0
 SEEN_NONEXCLUSIVE=0
+SEEN_PENIS=0
 SEEN_RANDOM=0
 SEEN_TYPE=0
 WITH_SYSTEMD_SEEN=0
@@ -4780,10 +4782,11 @@ is_cli_option_token() {
 
     case "$base" in
         -h|h|--help|help|-v|v|--version|version|-S|S|--show|show|\
-        --show-warranty| --show-conditions|-b|b|--binary|binary|-B|B|--burst|\
-        burst|--force-burst| -c|c|--column|column|-C|C|--custom|custom|-d|d|\
+        --show-warranty|--show-conditions|-P|P|--penis|penis|\
+        -b|b|--binary|binary|-B|B|--burst|burst|--force-burst|\
+        -c|c|--column|column|-C|C|--custom|custom|-d|d|\
         --directory|directory|-D|D|--duration|duration|-f|f|--file|file|-F|F|\
-        --format|format| --full|full|-i|i|--install|install|-l|l|--local|\
+        --format|format|--full|full|-i|i|--install|install|-l|l|--local|\
         local|-L|L|--location|location|-m|m|--maximum|maximum|\
         --force-maximum|--deny-any|--allow-any|--batch|batch|-o|o|--output|\
         output|-p|p|--port|port|-q|q|--qps|qps|-R|R|--random|random|\
@@ -5647,13 +5650,13 @@ EOF
 
             cat <<EOF
 $NAME continuously (or time-bounded) sends DNS a configurable volume of 
-queries of any type from a prepared domain top domains list and/or custom list,
-using token-bucket scheduling and a worker pool.
+queries of any type from a prepared domain top domains list and/or custom
+list, using token-bucket scheduling and a worker pool.
 
-Whether it's a trickle of queries or a flood, in bursts or at a constant rate,
-on demand or as a periodic background task, with dig or nslookup, $NAME
-is designed to generate controlled DNS traffic for cache priming, testing,
-benchmarking, or otherwise simulating workloads against resolvers.
+Whether it's a trickle of queries or a flood, in bursts or at a constant
+rate, on demand or as a periodic background task, with dig or nslookup,
+$NAME is designed to generate controlled DNS traffic for cache priming,
+testing, benchmarking, or otherwise simulating workloads against resolvers.
 
 Key properties:
   - Deterministic rate shaping via qps + burst
@@ -5662,8 +5665,8 @@ Key properties:
   - Resolver targeting (local/remote, IPv4/IPv6, port)
   - Query tool selection (dig/nslookup) and RR type selection
 
-$NAME is an impractically complex resolver workload tool for controlled DNS
-traffic generation.
+$NAME is an impractically complex resolver workload tool for controlled
+DNS traffic generation.
 
 See also:
   --help what
@@ -5679,7 +5682,8 @@ EOF
 
             cat <<EOF
 Data path:
-  Domain source(s) -> parser -> deduplication -> top-N -> dispatch -> workers.
+  Domain source(s) -> parser -> deduplication -> top-N -> dispatch ->
+  workers.
 
 Primary controls:
   -q/--qps          tokens per second
@@ -5732,9 +5736,45 @@ Address forms accepted by -l/-r:
   [ipv6]:port
 
 Multi-endpoint:
-  You may supply multiple resolver endpoints via repeated -l/-r and/or
-  comma-separated values. Endpoints are stored as host+port entries and
-  selected per dispatched query according to --resolver-strategy.
+  -l/--local and -r/--remote populate separate resolver pools. Multiple
+  endpoints may be supplied using repeated options or comma-separated values.
+
+  Endpoints remain in their respective pools even when that pool is not
+  active.
+  The active pool is selected by --location.
+
+Resolver selection:
+  Without an explicit --location:
+    --local ADDRESS   implicitly selects the local pool
+    --remote ADDRESS  implicitly selects the remote pool
+
+  With an explicit --location:
+    --location local   activates the local pool
+    --location remote  activates the remote pool
+    --location auto    selects automatically from the resolver flags
+
+  An endpoint supplied to an inactive pool is retained but is not queried:
+    --location local --remote ADDRESS
+      stores ADDRESS in the remote pool but uses the local pool.
+
+    --location remote --local ADDRESS
+      stores ADDRESS in the local pool but uses the remote pool.
+
+Using both resolver flags:
+  Supplying both --local and --remote requires an explicit non-auto location:
+    --location local
+    or
+    --location remote
+
+  --location auto is rejected when both resolver flags are supplied.
+
+Local-address validation:
+  An implicitly selected local pool requires local/private, loopback,
+  link-local, or unique-local addresses.
+
+  Explicit --location local enables test/lab behaviour and permits any valid
+  IP address in the local pool, including an address that is publicly-routed
+  or otherwise not locally-addressed.
 
 See also:
   --help resolver-strategy
@@ -6025,9 +6065,9 @@ Related variables:
                     Strict mode for --dig-options mismatch (default: 0)
 
 Note:
-  You can override these variables via the environment to customise status file
-  location or locking behaviour, the default paths are chosen to follow common
-  Linux filesystem conventions.
+  You can override these variables via the environment to customise status
+  file location or locking behaviour, the default paths are chosen to follow
+  commonLinux filesystem conventions.
 
   Since service read/write paths are controlled by the service unit
   configuration, make sure to adjust the unit file if you change the default
@@ -6301,16 +6341,16 @@ Defaults:
 
 Sample-count selection:
   - _AUTO_TUNE_SAMPLES is the base sample count.
-  - If both _AUTO_TUNE_SAMPLES_MIN and _AUTO_TUNE_SAMPLES_MAX are set to valid
-    positive integers and MAX >= MIN, sample count is randomised uniformly in
-    [MIN, MAX].
+  - If both _AUTO_TUNE_SAMPLES_MIN and _AUTO_TUNE_SAMPLES_MAX are set to
+    valid positive integers and MAX >= MIN, sample count is randomised
+    uniformly in [MIN, MAX].
   - If only one of MIN/MAX is set, range mode is ignored and
     _AUTO_TUNE_SAMPLES is used.
   - Sample count is clamped to available domain count when necessary.
 
 Warmup domain selection:
-  - Warmup domains are selected randomly (without replacement) from the active
-    domain pool, not taken from the head of the list.
+  - Warmup domains are selected randomly (without replacement) from the
+    active domain pool, not taken from the head of the list.
   - Active pool means domains after parsing/validation, deduplication, and
     active top/filter selection.
 
@@ -6324,7 +6364,7 @@ Mechanism:
      - compute median (p50) and target percentile (_AUTO_TUNE_PERCENTILE)
      - cap percentile to: pctl_ms <= p50_ms * _AUTO_TUNE_PCTL_MAX_RATIO
   3) Derive:
-     batch_effective = (_DIG_BATCH_SIZE_EFFECTIVE with dig -B/--batch, else 1)
+     batch_effective = (_DIG_BATCH_SIZE_EFFECTIVE with dig -B/--batch else 1)
      _MAXIMUM ~= ceil((_QPS / batch_effective) * (pctl_ms/1000) * 1.2)
      _BURST   ~= ceil(_QPS * (_AUTO_TUNE_BURST_WINDOW_MS/1000))
      if batch_effective > 1:
@@ -6353,7 +6393,8 @@ Notes:
     higher depending on various factors including but not necessarily limited
     to network conditions, resolver performance, cosmic rays, how much saint
     sucks at writing progressive selection algorithms, the phase of the moon
-    and the alignment of the planets; especially Pluto, which is a known jerk.
+    and the alignment of the planets; especially Pluto, which is a known
+    jerk.
   - If you are reading this documentation, you're probably trying to do
     something clever and/or evil with DNdistresS. I don't know what it is.
     Actually, I have a pretty good idea, but I can tell you that if you are
@@ -6413,12 +6454,13 @@ Mode:
   replace => user bundle only
 
 Behaviour:
-  - Captures tokens after --dig-options until the next valid DNdistresS option
-    or end-of-command.
+  - Captures tokens after --dig-options until the next valid DNdistresS
+    option or end-of-command.
   - Applies only when _BINARY=dig (or auto resolves to dig).
-  - Effective args are mode-dependent, then +short is always enforced at tail.
-  - If auto resolves to nslookup, options are ignored with warning by default;
-    set _STRICT_DIG_OPTIONS=1 to fail instead.
+  - Effective args are mode-dependent, then +short is always enforced at
+    tail.
+  - If auto resolves to nslookup, options are ignored with warning by
+    default; set _STRICT_DIG_OPTIONS=1 to fail instead.
   - Rejects conflicting dig tokens that alter DNdistresS owned query shape/
     transport: @server, -p, -q, -t, -x, -f.
 
@@ -6510,7 +6552,8 @@ Equivalent environment effects:
   _DIG_BATCH_SIZE=N
 
 Scope:
-  dig only. If binary resolves to nslookup, batching is disabled with warning.
+  dig only. If binary resolves to nslookup, batching is disabled with
+  warning.
 
 Effective size:
   _DIG_BATCH_SIZE_EFFECTIVE = min(_DIG_BATCH_SIZE, _BURST), at least 1.
@@ -6553,8 +6596,8 @@ See also:
 
 Note:
   Burst controls dispatch pacing; worker count remains fixed at -m/--maximum.
-  When --batch is enabled for dig, burst still caps admitted queries per tick,
-  while batch size controls queries per dig process.
+  When --batch is enabled for dig, burst still caps admitted queries per
+  tick, while batch size controls queries per dig process.
 EOF
 
             ;;
@@ -6564,7 +6607,7 @@ EOF
 
             cat <<EOF
 Meaning:
-  Overrides the burst safety clamp tied to _QPS (default: _BURST <= _QPS * 2).
+  Override the burst safety clamp tied to _QPS (default: _BURST <= _QPS * 2).
 
 Usage:
   -B 200!
@@ -6690,17 +6733,39 @@ EOF
 
             cat <<EOF
 Meaning:
-  Local resolver address.
+  Adds one or more resolver endpoints to the local resolver pool.
 
-Accepted:
-  IPv4/IPv6, optional #port or [ipv6]:port.
+Usage:
+  -l, --local ADDRESS[,ADDRESS...]
+  -l, --local ADDRESS#PORT
+  -l, --local '[IPv6]:PORT'
+
+Accepted address forms:
+  IPv4
+  IPv6
+  host#port
+  [IPv6]:port
 
 Default:
   $_LOCAL
 
-Behaviour:
-  Sets the local resolver target. If --location is not explicitly set,
-  this also makes local the active location.
+Location selection:
+  If no --location option was supplied, --local implicitly selects local
+  mode.
+
+  An explicit --location takes precedence over that implicit selection:
+    --location local   uses the local pool
+    --location remote  uses the remote pool
+    --location auto    selects automatically from the resolver flags
+
+Validation:
+  Implicit local mode requires local/private, loopback, link-local, or
+  unique-local addresses.
+
+  Explicit --location local enables advanced test/lab behaviour and permits
+  any syntactically valid IP address in the local pool. This is useful when
+  a resolver is logically local but uses a spoofed or publicly-routed
+  address.
 
 See also:
   --help resolver
@@ -6721,16 +6786,56 @@ Default:
   $_LOCATION
 
 Meaning:
-  Selects resolver location mode.
+  Selects which resolver pool is active.
 
 Modes:
-  auto    best-effort default path
-  local   force local mode (override for advanced testing)
-  remote  force remote mode (override for advanced testing)
+  auto
+    Selects local by default. If --remote was supplied, selects remote.
+    Supplying --location auto explicitly prevents --local/--remote from
+    changing the stored location value, but automatic selection still uses
+    the resolver flags.
 
-Use case:
-  Allows deliberate local/remote classification overrides in spoofed or
-  lab/test network scenarios.
+  local
+    Explicitly activates the local resolver pool. This also enables advanced
+    test/lab behaviour: local endpoints may use any syntactically valid IP
+    address, including a public address.
+
+  remote
+    Explicitly activates the remote resolver pool.
+
+Implicit selection:
+  Without an explicit --location:
+    --local ADDRESS   implies --location local
+    --remote ADDRESS  implies --location remote
+
+Explicit location takes precedence over implicit selection:
+  --location local --remote ADDRESS
+    stores the remote endpoint but runs against the local pool.
+
+  --location remote --local ADDRESS
+    stores the local endpoint but runs against the remote pool.
+
+Using both resolver flags:
+  Supplying both --local and --remote requires an explicit non-auto location:
+    --location local
+    or
+    --location remote
+
+  This allows one pool to be active while the other is retained as
+  configuration, but --location auto is rejected in this case.
+
+Examples:
+  DNdistresS --local 127.0.0.1
+    Implicit local mode; strict local-address validation applies.
+
+  DNdistresS --remote 1.1.1.1
+    Implicit remote mode.
+
+  DNdistresS --location local --local 203.0.113.53
+    Explicit local mode; suitable for a lab/spoofed local resolver address.
+
+  DNdistresS --location remote --local 203.0.113.53 --remote 1.1.1.1
+    Both pools are supplied, but remote is active.
 
 See also:
   --help resolver
@@ -6935,17 +7040,33 @@ EOF
 
             cat <<EOF
 Meaning:
-  Remote resolver address.
+  Adds one or more resolver endpoints to the remote resolver pool.
 
-Accepted:
-  IPv4/IPv6, optional #port or [ipv6]:port.
+Usage:
+  -r, --remote ADDRESS[,ADDRESS...]
+  -r, --remote ADDRESS#PORT
+  -r, --remote '[IPv6]:PORT'
+
+Accepted address forms:
+  IPv4
+  IPv6
+  host#port
+  [IPv6]:port
 
 Default:
   $_REMOTE
 
-Behaviour:
-  Sets the remote resolver target. If --location is not explicitly set,
-  this also makes remote the active location.
+Location selection:
+  If no --location option was supplied, --remote implicitly selects remote
+  mode.
+
+  An explicit --location takes precedence over that implicit selection:
+    --location local   uses the local pool
+    --location remote  uses the remote pool
+    --location auto    selects automatically from the resolver flags
+
+Remote endpoints use general IP-address validation and are not required to
+belong to a public or globally-routable range.
 
 See also:
   --help resolver
@@ -7174,6 +7295,13 @@ See also:
 EOF
 
             ;;
+        penis)
+
+            help_topic_header "penis"
+
+            printf '%s\n' "penis"
+
+            ;;
         *)
 
             log 1 "unknown help topic: ${LIGHT_GREY}$topic"
@@ -7356,6 +7484,9 @@ canonical_help_topic() {
             ;;
         log-mode|log_mode|logmode|LOG_MODE)
             printf '%s\n' "log-mode"
+            ;;
+        penis|-P|P|--penis)
+            printf '%s\n' "penis"
             ;;
         *)
             return 1
@@ -8973,6 +9104,14 @@ do_DNdistresS() {
 
     while [ "$#" -gt 0 ]; do
 
+        if [ "$SEEN_PENIS" -eq 1 ]; then
+
+            log 1 "${LIGHT_GREY}-P${RED}/${LIGHT_GREY}--penis${RED} cannot be combined with any other option or command"
+
+            exit_with_status "$EXIT_USAGE"
+
+        fi
+
         case "$1" in
             -h|h|--help|help)
 
@@ -8987,8 +9126,22 @@ do_DNdistresS() {
                 shift
                 ;;
             -P|P|--penis|penis)
+
+                [ "$SEEN_ANY_ARG" -eq 0 ] || {
+
+                    log 1 "${LIGHT_GREY}-P${RED}/${LIGHT_GREY}--penis${RED} cannot be combined with any other option or command"
+
+                    exit_with_status "$EXIT_USAGE"
+
+                }
+
+                SEEN_PENIS=1
+                SEEN_ANY_ARG=1
+
                 printf '%s\n' "penis"
-                exit 13
+
+                exit_with_status "$EXIT_PENIS"
+
                 ;;
             -S|S|--show|show)
 
@@ -9477,6 +9630,8 @@ do_DNdistresS() {
 
                 ;;
         esac
+
+        SEEN_ANY_ARG=1
 
     done
 
