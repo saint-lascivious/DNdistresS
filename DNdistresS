@@ -8,7 +8,7 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=1
 VERSION_MINOR=0
-VERSION_MICRO=0
+VERSION_MICRO=1
 VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
@@ -4696,6 +4696,7 @@ SEEN_L=0
 SEEN_R=0
 SEEN_C=0
 SEEN_NONEXCLUSIVE=0
+SEEN_ANY_ARG=0
 SEEN_PENIS=0
 SEEN_RANDOM=0
 SEEN_TYPE=0
@@ -9106,9 +9107,17 @@ do_DNdistresS() {
 
         if [ "$SEEN_PENIS" -eq 1 ]; then
 
-            log 1 "${LIGHT_GREY}-P${RED}/${LIGHT_GREY}--penis${RED} cannot be combined with any other option or command"
+            [ "$#" -eq 0 ] || {
 
-            exit_with_status "$EXIT_USAGE"
+                log 1 "${LIGHT_GREY}-P${RED}/${LIGHT_GREY}--penis${RED} cannot be combined with any other option or command"
+
+                exit_with_status "$EXIT_USAGE"
+
+            }
+
+            printf '%s\n' "penis"
+
+            exit_with_status "$EXIT_PENIS"
 
         fi
 
@@ -9138,10 +9147,7 @@ do_DNdistresS() {
                 SEEN_PENIS=1
                 SEEN_ANY_ARG=1
 
-                printf '%s\n' "penis"
-
-                exit_with_status "$EXIT_PENIS"
-
+                shift
                 ;;
             -S|S|--show|show)
 
@@ -9634,6 +9640,14 @@ do_DNdistresS() {
         SEEN_ANY_ARG=1
 
     done
+
+    if [ "$SEEN_PENIS" -eq 1 ]; then
+
+        printf '%s\n' "penis"
+
+        exit_with_status "$EXIT_PENIS"
+
+    fi
 
     [ "$#" -eq 0 ] || {
 
