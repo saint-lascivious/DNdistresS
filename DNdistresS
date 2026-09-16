@@ -8,7 +8,7 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=1
 VERSION_MINOR=0
-VERSION_MICRO=2
+VERSION_MICRO=3
 VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
@@ -8293,7 +8293,7 @@ show_runtime_report() {
         label="$1"
         value="$2"
 
-        printf '%b[%b·%b] %b%-23s%b %b%s%b\n' \
+        printf '%b[%b·%b] %b%-25s%b %b%s%b\n' \
             "$LIGHT_GREY" "$GREY" "$LIGHT_GREY" \
             "$GREY" "$label" "$NONE" \
             "$LIGHT_GREY" "$value" "$NONE"
