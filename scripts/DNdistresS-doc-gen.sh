@@ -284,20 +284,34 @@ emit_static_example_run_section() {
 ## Simple Example Run
 
 ```text
-A short sample run of DNdistresS with a 10-second duration and otherwise
-default (and thus very conservative) settings:
+A short demonstration whereby DNdistresS mirrors logical queries to each
+resolver in the pool while enforcing global QPS/burst/worker limits.
+```
 
-user@hostname:~$ ./DNdistresS --duration 10
-[·] queries sent:           161
-[·] queries completed:      161
-[·] answers received:       450
-[·] QPS (active):           16.2
-[·] QPS (total):            7.32
-[·] completed QPS (window): 16.15
-[·] completed QPS (total):  7.32
-[·] answer QPS (window):    45.14
-[·] answer QPS (total):     20.45
+```bash
+user@hostname:~$ ./DNdistresS \
+    --location remote \
+    --remote 1.1.1.1,8.8.8.8,9.9.9.9 \
+    --resolver-strategy parallel \
+    --qps 32 \
+    --burst 8 \
+    --maximum 8 \
+    --duration 10s
+[·] queries sent:              324
+[·] logical queries admitted:  108
+[·] queries completed:         324
+[·] answers received:          911
+[·] QPS (active):              32.79
+[·] QPS (total):               14.09
+[·] completed QPS (window):    29.56
+[·] completed QPS (total):     14.09
+[·] answer QPS (window):       83.12
+[·] answer QPS (total):        39.61
+[·] total runtime:             23s
+[·] query window:              10s 960ms
+[·] active query time:         9s 880ms
 [✓] done!
+user@hostname:~$
 ```
 
 EOF
