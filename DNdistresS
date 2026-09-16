@@ -8,13 +8,13 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=1
 VERSION_MINOR=0
-VERSION_MICRO=1
+VERSION_MICRO=2
 VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-09-15 NZST"
+RELEASE_DATE="2026-09-16 NZST"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT="(C) 2026"
@@ -47,6 +47,7 @@ epoch_s_posix() {
             md[1]=31; md[2]=28; md[3]=31; md[4]=30; md[5]=31; md[6]=30
             md[7]=31; md[8]=31; md[9]=30; md[10]=31; md[11]=30; md[12]=31
         }
+
         {
             y=$1+0; m=$2+0; d=$3+0; H=$4+0; M=$5+0; S=$6+0
             days=0
@@ -63,6 +64,7 @@ epoch_s_posix() {
             days += (d-1)
             print (days*86400 + H*3600 + M*60 + S)
         }'
+
 }
 
 now_ms() {
@@ -2955,15 +2957,14 @@ _DNdistresS_help_topics() {
 
     printf '%s\n' \
         general usage topics topics-list what why info examples description \
-        runtime resolver resolver-strategy domains status environment \
-        exit-codes install uninstall show version help auto-tune batch \
-        binary burst force-burst column custom dig-options \
-        dig-options-mode strict-dig-options directory duration file format \
-        local location maximum force-maximum output port qps random remote \
-        seconds top type deny-any allow-any url verbosity log-mode \
-        clock-tick-ms drain-timeout-ms with-systemd with-bash-completion \
-        full
-}
+        allow-any auto-tune batch binary burst clock-tick-ms column custom \
+        deny-any dig-options dig-options-mode directory duration environment \
+        exit-codes file format force-burst force-maximum full help install \
+        local location log-mode maximum output port purge qps random remote \
+        resolver resolver-strategy runtime seconds show status \
+        strict-dig-options top type uninstall url verbosity version \
+        with-bash-completion with-systemd
+    }
 
 _DNdistresS_show_topics() {
     printf '%s\n' w c warranty conditions
@@ -4019,6 +4020,7 @@ extract_domains() {
             }
 
         }
+
     '
 
 }
@@ -4081,6 +4083,7 @@ extract_custom_domains() {
             if (is_domain(d)) print d
 
         }
+
     '
 
 }
@@ -4835,8 +4838,8 @@ help_topics() {
         "    dig-options-mode strict-dig-options directory duration file format" \
         "    local location maximum force-maximum output port qps random remote" \
         "    resolver-strategy seconds top type deny-any allow-any url verbosity" \
-        "    log-mode clock-tick-ms drain-timeout-ms with-systemd with-bash-completion" \
-        "    full purge" \
+        "    log-mode clock-tick-ms drain-timeout-ms with-systemd" \
+        "    with-bash-completion full purge" \
         "" \
         "  Aliases:" \
         "    -h/--help, -v/--version, -S/--show, -b/--binary, -B/--burst, -c/--column" \
@@ -10349,6 +10352,7 @@ do_DNdistresS() {
             if (matched) emit_domain(d)
 
         }
+
     ' > "$DOMAINS"
 
     _DOMAINS="$(wc -l < "$DOMAINS" | tr -d ' ')"
