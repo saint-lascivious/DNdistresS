@@ -591,11 +591,11 @@ EOF
 
 EOF
 
-    emit_index_group "General"
-
     emit_index_group "Commands"
 
     emit_index_group "Options"
+
+    emit_index_group "General"
 
     emit_development_index
 
@@ -663,11 +663,11 @@ if [ "$CONTENT_CHANGED" -eq 1 ]; then
     printf '\n%s\n' " - summary:"
     printf '    - topics: %d\n' "${#README_TOPICS_ARR[@]}"
 
-    print_topic_summary_group "General"
-
     print_topic_summary_group "Commands"
 
     print_topic_summary_group "Options"
+
+    print_topic_summary_group "General"
 
     printf '    - development:\n'
     printf '       - contributing\n'
