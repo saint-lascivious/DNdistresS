@@ -281,7 +281,7 @@ topic_group() {
 
 emit_static_example_run_section() {
     cat <<'EOF'
-## Simple Example Run
+## Example Run
 
 ```text
 A short demonstration whereby DNdistresS mirrors logical queries to each
@@ -289,29 +289,26 @@ resolver in the pool while enforcing global QPS/burst/worker limits.
 ```
 
 ```bash
-user@hostname:~$ ./DNdistresS \
+user@hostname:~/source/DNdistresS$ ./DNdistresS \
     --location remote \
-    --remote 1.1.1.1,8.8.8.8,9.9.9.9 \
+    --remote 1.1.1.1,8.8.8.8,9.9.9.9,208.67.222.222 \
     --resolver-strategy parallel \
     --qps 32 \
     --burst 8 \
     --maximum 8 \
     --duration 10s
-[·] queries sent:              324
-[·] logical queries admitted:  108
-[·] queries completed:         324
-[·] answers received:          911
-[·] QPS (active):              32.79
-[·] QPS (total):               14.09
-[·] completed QPS (window):    29.56
-[·] completed QPS (total):     14.09
-[·] answer QPS (window):       83.12
-[·] answer QPS (total):        39.61
-[·] total runtime:             23s
-[·] query window:              10s 960ms
-[·] active query time:         9s 880ms
+[·] queries sent:             324
+[·] logical queries admitted: 108
+[·] queries completed:        324
+[·] answers received:         920
+[·] QPS (active):             32.79
+[·] QPS (total):              14.73
+[·] completed QPS (window):   32.63
+[·] completed QPS (total):    14.73
+[·] answer QPS (window):      92.65
+[·] answer QPS (total):       41.82
 [✓] done!
-user@hostname:~$
+user@hostname:~/source/DNdistresS$
 ```
 
 EOF
