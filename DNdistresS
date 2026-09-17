@@ -8,13 +8,13 @@ NAME="DNdistresS"
 
 VERSION_MAJOR=1
 VERSION_MINOR=0
-VERSION_MICRO=3
+VERSION_MICRO=4
 VERSION_PICO_STRING=""
 
 SCRIPT_NAME="${0##*/}"
 VERSION="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_MICRO}"
 BRANCH="master"
-RELEASE_DATE="2026-09-16 NZST"
+RELEASE_DATE="2026-09-17 NZST"
 LICENSE="GNU General Public License v3.0 or later"
 CONTACT="saint@sainternet.xyz"
 COPYRIGHT="(C) 2026"
@@ -5437,7 +5437,7 @@ DNdistresS exists to answer a question that no one asked:
 for some reason all I have is a POSIX shell, a handful of built-ins, and a few
 common utilities?"
 
-Use it for cache priming, baseline and stress comparison, change validation
+Use it for cache priming, baseline and stress comparison, change validation,
 reproducible resolver/network tests, interrogation, and automation whenever a
 repeatable DNS workload is desired.
 
